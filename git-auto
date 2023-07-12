@@ -56,15 +56,25 @@ if [[ -z "${branch}" ]]; then
 fi
 
 get-commit-message() {
-    local commit_message=$(git diff --name-only HEAD~1..HEAD)
+    local commit_message=$(git diff --name-only HEAD~1..HEAD | grep -Pv "(^\.)|(\/\.)" )
     commit_message=$(echo "${commit_message}" | sed -e 's/^.*\///')
+    
+    # If commit message is empty after processing, provide a fallback message
+    if [ -z "$commit_message" ]; then
+        commit_message="Commit involves changes in hidden files or directories only."
+    fi
+
     echo "${commit_message}"
 }
+
+
 
 auto-commit-and-push() {
   if ! [[ $(git status) =~ "working tree clean" ]]; then
     git add .
-    git commit -m "$(get-commit-message)"
+    commitMessage="$(get-commit-message)"
+    echo "${commitMessage:0:400}"
+    git commit -m "${commitMessage:0:400}"
 
     if [[ 1 == ${rebase} ]]; then
       git pull --rebase
