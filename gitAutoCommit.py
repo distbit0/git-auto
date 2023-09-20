@@ -3,7 +3,6 @@ import sys
 import re
 
 
-#
 def generate_commit_message():
     # Run git command to get changed files between HEAD~1 and HEAD
     result = subprocess.run(
