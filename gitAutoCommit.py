@@ -1,9 +1,33 @@
 import subprocess
 import sys
+import re
+
+
+def generate_commit_message():
+    # Run git command to get changed files between HEAD~1 and HEAD
+    result = subprocess.run(
+        ["git", "diff", "--name-only", "HEAD~1..HEAD"], capture_output=True, text=True
+    )
+    commit_message = result.stdout.strip()
+
+    # Remove any paths that start with a dot or contain a slash followed by a dot
+    commit_message = "\n".join(
+        [
+            re.sub(r"^.*/", "", line)
+            for line in commit_message.split("\n")
+            if not re.search(r"(^\.)|(\/\.)", line)
+        ]
+    )
+
+    # If commit message is empty after processing, provide a fallback message
+    if not commit_message:
+        commit_message = "Commit involves changes in hidden files or directories only."
+
+    return commit_message
 
 
 def main():
-    custom_message = sys.argv[1] if len(sys.argv) > 1 else "Default commit message"
+    custom_message = sys.argv[1] if len(sys.argv) > 1 else generate_commit_message()
 
     # Check if there are any changes in the working directory
     changes_in_index = subprocess.run(

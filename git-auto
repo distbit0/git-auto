@@ -1,98 +1,49 @@
-#!/usr/bin/env bash
+import subprocess
+import sys
+import re
 
-## Tested on macOS big sur 11.2.1
-## Usage:
-##  git-auto ;; use current script dir as git dir, and auto commit, not push.
-##  git-auto -d /path/to/your/note's/dir   ;; set git dir
-##  git-auto -p ;; auto commit and push
-## git-auto -r ;; auto commit, rebase, merge, push
-##  git-auto -s origin -p ;; set remote server
-##  git-auto -b main -p ;; set git branch
-##  git-auto -i 30 -p ;; set interval seconds
-##  git-auto -o -p;; execute once
+def generate_commit_message():
+    # Run git command to get changed files between HEAD~1 and HEAD
+    result = subprocess.run(['git', 'diff', '--name-only', 'HEAD~1..HEAD'], capture_output=True, text=True)
+    commit_message = result.stdout.strip()
 
+    # Remove any paths that start with a dot or contain a slash followed by a dot
+    commit_message = "\n".join([re.sub(r'^.*/', '', line) for line in commit_message.split('\n') if not re.search(r'(^\.)|(\/\.)', line)])
 
-#set -e
-#set -x
-
-usage="usage: $0
-    [-d <git directory>]
-    [-i <interval seconds>]
-    [-p <push to remote server>]
-    [-r rebase before pushing changes]
-    [-s git remote server]
-    [-b git branch]
-    [-o <execute once]"
-
-push_to_server=0
-server=origin
-interval=20
-once=0
-
-OPTIND=1
-while getopts d:i:b:s:pro flag; do
-  case "${flag}" in
-  d) directory=${OPTARG} ;;
-  p) push_to_server=1 ;;
-  r) rebase=1 ;;
-  o) once=1 ;;
-  s) server=${OPTARG} ;;
-  b) branch=${OPTARG} ;;
-  i) interval=${OPTARG} ;;
-  *)
-    echo "ERROR: ${usage}" >&2
-    exit 1
-    ;;
-  esac
-done
-shift $((OPTIND - 1))
-
-if  [[ "${directory}" ]]; then
-  cd "${directory}" || exit 1
-fi
-
-if [[ -z "${branch}" ]]; then
-  branch=$(git rev-parse --abbrev-ref HEAD)
-fi
-
-get-commit-message() {
-    local commit_message=$(git diff --name-only HEAD~1..HEAD | grep -Pv "(^\.)|(\/\.)" )
-    commit_message=$(echo "${commit_message}" | sed -e 's/^.*\///')
-    
     # If commit message is empty after processing, provide a fallback message
-    if [ -z "$commit_message" ]; then
-        commit_message="Commit involves changes in hidden files or directories only."
-    fi
+    if not commit_message:
+        commit_message = "Commit involves changes in hidden files or directories only."
 
-    echo "${commit_message}"
-}
+    return commit_message
 
+def main():
+    custom_message = sys.argv[1] if len(sys.argv) > 1 else generate_commit_message()
 
+    # Check if there are any changes in the working directory
+    changes_in_index = subprocess.run(['git', 'diff-index', '--quiet', 'HEAD', '--'], capture_output=True, text=True)
+    changes_not_staged = subprocess.run(['git', 'status', '--porcelain', '--untracked-files=no'], capture_output=True, text=True).stdout.strip()
 
-auto-commit-and-push() {
-  if ! [[ $(git status) =~ "working tree clean" ]]; then
-    git add .
-    commitMessage="$(get-commit-message)"
-    echo "${commitMessage:0:400}"
-    git commit -m "${commitMessage:0:400}"
+    if changes_in_index.returncode == 0 and not changes_not_staged:
+        print("No changes to commit.")
+        return
 
-    if [[ 1 == ${rebase} ]]; then
-      git pull --rebase
-    fi
+    # Stage all changes
+    subprocess.run(['git', 'add', '.'])
 
-    if [[ 1 == "${push_to_server}" ]]; then
-      git push "${server}" "${branch}"
-    fi
-  fi
-}
+    # Commit the changes with the custom message
+    commit_status = subprocess.run(['git', 'commit', '-m', custom_message])
 
-date
+    if commit_status.returncode == 0:
+        print("Commit successful. Pushing to remote.")
+        
+        # Push to remote
+        push_status = subprocess.run(['git', 'push'])
+        if push_status.returncode == 0:
+            print("Push successful.")
+        else:
+            print("Push failed.")
+    else:
+        print("Commit failed.")
 
-if [[ 1 == "${once}" ]]; then
-  auto-commit-and-push
-else
-  while true; do
-    auto-commit-and-push
-    sleep "${interval}"
-  done
-fi
+if __name__ == '__main__':
+    main()
