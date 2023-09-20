@@ -4,13 +4,11 @@ import re
 
 
 def generate_commit_message():
-    # Run git command to get changed files between HEAD~1 and HEAD
+    # Run git command to get names of files staged for the current commit
     result = subprocess.run(
-        ["git", "diff", "--name-only", "HEAD~1..HEAD"], capture_output=True, text=True
+        ["git", "diff", "--name-only", "--cached"], capture_output=True, text=True
     )
     commit_message = result.stdout.strip()
-
-    print("\n\n\n\n\n", commit_message, "\n\n\n\n\n")
 
     # Remove any paths that start with a dot or contain a slash followed by a dot
     commit_message = "\n".join(
