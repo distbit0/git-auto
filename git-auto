@@ -14,7 +14,7 @@
 
 #set -e
 #set -x
-
+#
 usage="usage: $0
     [-d <git directory>]
     [-i <interval seconds>]
