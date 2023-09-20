@@ -10,7 +10,7 @@ def generate_commit_message():
     )
     commit_message = result.stdout.strip()
 
-    print(commit_message)
+    print("Commit message: " + commit_message)
 
     # Remove any paths that start with a dot or contain a slash followed by a dot
     commit_message = "\n".join(
