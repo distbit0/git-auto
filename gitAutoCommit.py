@@ -27,6 +27,9 @@ def generate_commit_message():
 
 
 def main():
+    # Stage all changes
+    subprocess.run(["git", "add", "."])
+
     # Check if there are any changes in the working directory
     changes_in_index = subprocess.run(
         ["git", "diff-index", "--quiet", "HEAD", "--"], capture_output=True, text=True
@@ -40,9 +43,6 @@ def main():
     if changes_in_index.returncode == 0 and not changes_not_staged:
         print("No changes to commit.")
         return
-
-    # Stage all changes
-    subprocess.run(["git", "add", "."])
 
     # Generate commit message if not provided
     custom_message = sys.argv[1] if len(sys.argv) > 1 else generate_commit_message()
