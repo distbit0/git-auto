@@ -55,7 +55,7 @@ def main():
 
         # Push to remote
         push_status = subprocess.run(
-            ["git", "push", "--set-upstream", "origin", "master"]
+            ["git", "push"]
         )
         if push_status.returncode == 0:
             print("Push successful.")
