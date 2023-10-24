@@ -1,7 +1,8 @@
 import subprocess
 import sys
 import re
-
+import argparse
+import os
 
 def generate_commit_message():
     # Run git command to get names of files staged for the current commit
@@ -27,7 +28,14 @@ def generate_commit_message():
 
 
 def main():
-    # Stage all changes
+
+    # Parse command line arguments
+    parser = argparse.ArgumentParser()
+    parser.add_argument("path", help="Path to apply the git operations to", default=".", nargs='?')
+    args = parser.parse_args()
+    # Change current working directory to the specified path
+    os.chdir(args.path)    # Stage all changes
+
     subprocess.run(["git", "add", "."])
 
     # Check if there are any changes in the working directory
