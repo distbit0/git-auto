@@ -28,7 +28,7 @@ def generate_commit_message():
 
 
 def main():
-
+    #
     # Parse command line arguments
     parser = argparse.ArgumentParser()
     parser.add_argument("path", help="Path to apply the git operations to", default=".", nargs='?')
