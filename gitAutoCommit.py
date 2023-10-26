@@ -14,9 +14,26 @@ def getAbsPathFromScript(relPath):
     return fullPath
 
 
-logging.basicConfig(
-    filename=getAbsPathFromScript("git_auto_commit.log"), level=logging.INFO
-)
+# Configure root logger
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+# File handler
+file_handler = logging.FileHandler(getAbsPathFromScript("git_auto_commit.log"))
+file_handler.setLevel(logging.INFO)
+
+# Stream handler to output logs to console
+stream_handler = logging.StreamHandler()
+stream_handler.setLevel(logging.INFO)
+
+# Formatter
+formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+file_handler.setFormatter(formatter)
+stream_handler.setFormatter(formatter)
+
+# Add handlers to root logger
+logger.addHandler(file_handler)
+logger.addHandler(stream_handler)
 
 
 def getAbsPathFromPWD(relPath):
@@ -66,16 +83,16 @@ def main():
     lock_file_path = os.path.join(repoAbsPath, ".git", "index.lock")
 
     if os.path.exists(lock_file_path):
-        logging.warning(
+        logger.warning(
             f"{lock_file_path} exists in repo {repoAbsPath}. Waiting for other git operations to finish."
         )
         time.sleep(10)
         if os.path.exists(lock_file_path):
             if check_git_process():
-                logging.error(f"Git process running in repo {repoAbsPath}. Exiting.")
+                logger.error(f"Git process running in repo {repoAbsPath}. Exiting.")
                 exit(1)
             else:
-                logging.warning(
+                logger.warning(
                     f"Removing lock file in repo {repoAbsPath} after waiting."
                 )
                 os.remove(lock_file_path)
@@ -92,7 +109,7 @@ def main():
     ).stdout.strip()
 
     if changes_in_index.returncode == 0 and not changes_not_staged:
-        logging.info(f"No changes to commit in repo {repoAbsPath}.")
+        logger.info(f"No changes to commit in repo {repoAbsPath}.")
         return
 
     custom_message = args.message if args.message else generate_commit_message()
@@ -100,14 +117,14 @@ def main():
     commit_status = subprocess.run(["git", "commit", "-m", custom_message], check=True)
 
     if commit_status.returncode == 0:
-        logging.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
+        logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
         push_status = subprocess.run(["git", "push"], check=True)
         if push_status.returncode == 0:
-            logging.info(f"Push successful in repo {repoAbsPath}.")
+            logger.info(f"Push successful in repo {repoAbsPath}.")
         else:
-            logging.error(f"Push failed in repo {repoAbsPath}.")
+            logger.error(f"Push failed in repo {repoAbsPath}.")
     else:
-        logging.error(f"Commit failed in repo {repoAbsPath}.")
+        logger.error(f"Commit failed in repo {repoAbsPath}.")
 
 
 if __name__ == "__main__":
