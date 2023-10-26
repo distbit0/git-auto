@@ -39,6 +39,7 @@ def generate_commit_message():
             if not re.search(r"(^\.)|(\/\.)", line)
         ]
     )
+    # test
     if not commit_message:
         commit_message = "Commit involves changes in hidden files or directories only"
 
