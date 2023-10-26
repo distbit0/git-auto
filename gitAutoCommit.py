@@ -65,7 +65,11 @@ def generate_commit_message():
 
 def check_git_process():
     result = subprocess.run(["ps", "-ef"], capture_output=True, text=True)
-    return "git" in result.stdout
+    lines = result.stdout.split("\n")
+    for line in lines:
+        if "git" in line.split():
+            return True
+    return False
 
 
 def main():
