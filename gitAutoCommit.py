@@ -6,12 +6,23 @@ import logging
 import time
 from os import path
 
-logging.basicConfig(filename="git_auto_commit.log", level=logging.INFO)
 
-
-def getAbsPath(relPath):
+def getAbsPathFromScript(relPath):
     basepath = path.dirname(__file__)
     fullPath = path.abspath(path.join(basepath, relPath))
+
+    return fullPath
+
+
+logging.basicConfig(
+    filename=getAbsPathFromScript("git_auto_commit.log"), level=logging.INFO
+)
+
+
+def getAbsPathFromPWD(relPath):
+    # base path is pwd
+    basepath = os.getcwd()
+    fullPath = os.path.abspath(os.path.join(basepath, relPath))
 
     return fullPath
 
@@ -47,7 +58,7 @@ def main():
     parser.add_argument("-m", "--message", help="Custom commit message", default=None)
     args = parser.parse_args()
 
-    repoAbsPath = getAbsPath(args.path)
+    repoAbsPath = getAbsPathFromPWD(args.path)
 
     os.chdir(repoAbsPath)
 
