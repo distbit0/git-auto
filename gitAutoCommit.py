@@ -75,9 +75,11 @@ def check_git_process():
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "message", help="Custom commit message", nargs="?", default=None
+    )
+    parser.add_argument(
         "-p", "--path", help="Path to apply the git operations to", default="."
     )
-    parser.add_argument("-m", "--message", help="Custom commit message", default=None)
     args = parser.parse_args()
 
     repoAbsPath = getAbsPathFromPWD(args.path)
