@@ -95,13 +95,12 @@ def main():
         time.sleep(10)
         if os.path.exists(lock_file_path):
             if check_git_process():
-                logger.error(f"Git process running in repo {repoAbsPath}. Exiting.")
-                exit(1)
-            else:
-                logger.warning(
-                    f"Removing lock file in repo {repoAbsPath} after waiting."
+                logger.error(
+                    f"Git process running in repo {repoAbsPath}. Waiting another 60 seconds"
                 )
-                os.remove(lock_file_path)
+                time.sleep(60)
+            logger.warning(f"Removing lock file in repo {repoAbsPath} after waiting.")
+            os.remove(lock_file_path)
 
     subprocess.run(["git", "add", "."], check=True)
 
