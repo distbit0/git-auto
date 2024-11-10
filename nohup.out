@@ -1,0 +1,118 @@
+Opening in existing browser session.
+Opening in existing browser session.
+Opening in existing browser session.
+Opening in existing browser session.
+Killing process: wmctrl -c "Brave"
+
+
+
+About to execute command: wmctrl -c "Brave"
+
+
+
+Killing process: #wmctrl -c "Telegram"
+
+
+
+About to execute command: #wmctrl -c "Telegram"
+
+
+
+Killing process: #wmctrl -c "Discord"
+
+
+
+About to execute command: #wmctrl -c "Discord"
+
+
+
+Killing process: #wmctrl -c "web.whatsapp.com"
+
+
+
+About to execute command: #wmctrl -c "web.whatsapp.com"
+
+
+
+Killing process: #wmctrl -c "web.telegram.org"
+
+
+
+About to execute command: #wmctrl -c "web.telegram.org"
+
+
+
+Killing process: #wmctrl -c "discord.com"
+
+
+
+About to execute command: #wmctrl -c "discord.com"
+
+
+
+Killing process: pkill --signal 2 code
+
+
+
+About to execute command: pkill --signal 2 code
+
+
+
+Found workspace config dir: /home/pimania/.config/Code/User/workspaceStorage/45c0011df96db78fb48c8c2920d428fd/workspace.json {'folder': 'file:///home/pimania/notes'}
+Found workspace config dir: /home/pimania/.config/Code/User/workspaceStorage/7caa657a80bf9d454b9b37bd41d7a41e/workspace.json {'folder': 'file:///home/pimania/notes%20%28Copy%29'}
+Found workspace config dir: /home/pimania/.config/Code/User/workspaceStorage/b05f8dcdcc9a2dabdd39fdc5d1b0936a/workspace.json {'folder': 'file:///home/pimania/notes'}
+Found workspace config dir: /home/pimania/.config/Code/User/workspaceStorage/b5133dee224a2fd92e676dba827ae0dc/meta.json {'id': 'b5133dee224a2fd92e676dba827ae0dc', 'name': 'notes'}
+No memento/workbench.parts.editor row found in database: /home/pimania/.config/Code/User/workspaceStorage/45c0011df96db78fb48c8c2920d428fd/state.vscdb
+No memento/workbench.parts.editor row found in database: /home/pimania/.config/Code/User/workspaceStorage/7caa657a80bf9d454b9b37bd41d7a41e/state.vscdb
+Removed backup database: /home/pimania/.config/Code/User/workspaceStorage/b05f8dcdcc9a2dabdd39fdc5d1b0936a/state.vscdb.backup
+deleted all tabs in workspace: /home/pimania/.config/Code/User/workspaceStorage/b05f8dcdcc9a2dabdd39fdc5d1b0936a/ memento/workbench.parts.editor
+No memento/workbench.parts.editor row found in database: /home/pimania/.config/Code/User/workspaceStorage/b5133dee224a2fd92e676dba827ae0dc/state.vscdb
+
+
+
+About to execute command: brave-browser --new-window "https://docs.google.com/document/d/1gadrH6tXzlJmwcGUInSolYhtdRG5X_mNRJCgfROjCAk/edit" &
+
+
+
+
+
+
+About to execute command: brave-browser "https://app.slack.com/client/T02GBA68K43/C06CQCH1CQ0" &
+
+
+
+
+
+
+About to execute command: brave-browser "https://app.slack.com/client/T02A8UTG7FA/C03D0A943JR" &
+
+
+
+
+
+
+About to execute command: brave-browser "https://ap-southeast-2.console.aws.amazon.com/ec2/home?region=ap-southeast-2#Instances:instanceState=running" &
+
+
+
+
+
+
+About to execute command: code "/home/pimania/notes" &
+
+
+
+
+
+
+About to execute command: code -r "/home/pimania/notes/zk/paul tmp.md" &
+
+
+
+
+
+
+About to execute command: code -r "/home/pimania/notes/zk/paul todo.md" &
+
+
+
