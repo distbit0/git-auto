@@ -107,11 +107,15 @@ def main():
         subprocess.run(["git", "add", "."], check=True)
     except subprocess.CalledProcessError as e:
         logger.error(f"Git add failed in repo {repoAbsPath}: {e}")
-        subprocess.run([
-            'notify-send', 'Git AutoCommit Error',
-            f'Git add failed: {e}\nRepository: {repoAbsPath}',
-            '--urgency=critical', '--icon=dialog-error'
-        ])
+        subprocess.run(
+            [
+                "notify-send",
+                "Git AutoCommit Error",
+                f"Git add failed: {e}\nRepository: {repoAbsPath}",
+                "--urgency=critical",
+                "--icon=dialog-error",
+            ]
+        )
         sys.exit(1)
 
     changes_in_index = subprocess.run(
@@ -134,11 +138,15 @@ def main():
         logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
     except subprocess.CalledProcessError as e:
         logger.error(f"Commit failed in repo {repoAbsPath}: {e}")
-        subprocess.run([
-            'notify-send', 'Git AutoCommit Error',
-            f'Commit failed: {e}\nRepository: {repoAbsPath}',
-            '--urgency=critical', '--icon=dialog-error'
-        ])
+        subprocess.run(
+            [
+                "notify-send",
+                "Git AutoCommit Error",
+                f"Commit failed: {e}\nRepository: {repoAbsPath}",
+                "--urgency=critical",
+                "--icon=dialog-error",
+            ]
+        )
         sys.exit(1)
 
     try:
@@ -146,11 +154,15 @@ def main():
         logger.info(f"Push successful in repo {repoAbsPath}.")
     except subprocess.CalledProcessError as e:
         logger.error(f"Push failed in repo {repoAbsPath}: {e}")
-        subprocess.run([
-            'notify-send', 'Git AutoCommit Error',
-            f'Push failed: {e}\nRepository: {repoAbsPath}\nCheck internet connection',
-            '--urgency=critical', '--icon=dialog-error'
-        ])
+        subprocess.run(
+            [
+                "notify-send",
+                "Git AutoCommit Error",
+                f"Push failed: {e}\nRepository: {repoAbsPath}\nCheck internet connection",
+                "--urgency=critical",
+                "--icon=dialog-error",
+            ]
+        )
         sys.exit(1)
 
 
