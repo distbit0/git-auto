@@ -4,6 +4,7 @@ import argparse
 import os
 import logging
 import time
+import sys
 from os import path
 
 
@@ -102,7 +103,16 @@ def main():
             logger.warning(f"Removing lock file in repo {repoAbsPath} after waiting.")
             os.remove(lock_file_path)
 
-    subprocess.run(["git", "add", "."], check=True)
+    try:
+        subprocess.run(["git", "add", "."], check=True)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Git add failed in repo {repoAbsPath}: {e}")
+        subprocess.run([
+            'notify-send', 'Git AutoCommit Error',
+            f'Git add failed: {e}\nRepository: {repoAbsPath}',
+            '--urgency=critical', '--icon=dialog-error'
+        ])
+        sys.exit(1)
 
     changes_in_index = subprocess.run(
         ["git", "diff-index", "--quiet", "HEAD", "--"], capture_output=True, text=True
@@ -119,17 +129,29 @@ def main():
 
     custom_message = args.message if args.message else generate_commit_message()
 
-    commit_status = subprocess.run(["git", "commit", "-m", custom_message], check=True)
-
-    if commit_status.returncode == 0:
+    try:
+        subprocess.run(["git", "commit", "-m", custom_message], check=True)
         logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
-        push_status = subprocess.run(["git", "push"], check=True)
-        if push_status.returncode == 0:
-            logger.info(f"Push successful in repo {repoAbsPath}.")
-        else:
-            logger.error(f"Push failed in repo {repoAbsPath}.")
-    else:
-        logger.error(f"Commit failed in repo {repoAbsPath}.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Commit failed in repo {repoAbsPath}: {e}")
+        subprocess.run([
+            'notify-send', 'Git AutoCommit Error',
+            f'Commit failed: {e}\nRepository: {repoAbsPath}',
+            '--urgency=critical', '--icon=dialog-error'
+        ])
+        sys.exit(1)
+
+    try:
+        subprocess.run(["git", "push"], check=True)
+        logger.info(f"Push successful in repo {repoAbsPath}.")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Push failed in repo {repoAbsPath}: {e}")
+        subprocess.run([
+            'notify-send', 'Git AutoCommit Error',
+            f'Push failed: {e}\nRepository: {repoAbsPath}\nCheck internet connection',
+            '--urgency=critical', '--icon=dialog-error'
+        ])
+        sys.exit(1)
 
 
 if __name__ == "__main__":
