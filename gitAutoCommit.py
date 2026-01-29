@@ -127,27 +127,29 @@ def main():
         text=True,
     ).stdout.strip()
 
-    if changes_in_index.returncode == 0 and not changes_not_staged:
-        logger.info(f"No changes to commit in repo {repoAbsPath}.")
-        return
+    has_changes_to_commit = not (
+        changes_in_index.returncode == 0 and not changes_not_staged
+    )
 
-    custom_message = args.message if args.message else generate_commit_message()
-
-    try:
-        subprocess.run(["git", "commit", "-m", custom_message], check=True)
-        logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Commit failed in repo {repoAbsPath}: {e}")
-        subprocess.run(
-            [
-                "notify-send",
-                "Git AutoCommit Error",
-                f"Commit failed: {e}\nRepository: {repoAbsPath}",
-                "--urgency=critical",
-                "--icon=dialog-error",
-            ]
-        )
-        sys.exit(1)
+    if has_changes_to_commit:
+        custom_message = args.message if args.message else generate_commit_message()
+        try:
+            subprocess.run(["git", "commit", "-m", custom_message], check=True)
+            logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"Commit failed in repo {repoAbsPath}: {e}")
+            subprocess.run(
+                [
+                    "notify-send",
+                    "Git AutoCommit Error",
+                    f"Commit failed: {e}\nRepository: {repoAbsPath}",
+                    "--urgency=critical",
+                    "--icon=dialog-error",
+                ]
+            )
+            sys.exit(1)
+    else:
+        logger.info(f"No changes to commit in repo {repoAbsPath}. Pushing anyway.")
 
     try:
         subprocess.run(["git", "push"], check=True)
