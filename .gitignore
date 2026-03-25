@@ -2,3 +2,5 @@
 git-auto.iml
 git_auto_commit.log
 .aider*
+
+**/node_modules/
