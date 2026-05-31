@@ -58,6 +58,41 @@ class GitAutoCommitTests(unittest.TestCase):
             with working_directory(repo_path):
                 self.assertTrue(git_auto_commit.has_staged_changes())
 
+    def test_stale_index_lock_is_removed_after_waiting(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repo_path = Path(temporary_directory)
+            git(repo_path, "init", "-b", "master")
+
+            lock_path = repo_path / ".git" / "index.lock"
+            lock_path.write_text("", encoding="utf-8")
+            stale_timestamp = 1
+            os.utime(lock_path, (stale_timestamp, stale_timestamp))
+
+            with working_directory(repo_path):
+                git_auto_commit.wait_for_index_lock(str(repo_path))
+
+            self.assertFalse(lock_path.exists())
+
+    def test_auto_commit_state_marks_owned_staged_changes(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repo_path = Path(temporary_directory)
+            git(repo_path, "init", "-b", "master")
+            git(repo_path, "config", "user.email", "test@example.com")
+            git(repo_path, "config", "user.name", "Git Auto Commit Test")
+
+            tracked_file = repo_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(repo_path, "add", "tracked.txt")
+            git(repo_path, "commit", "-m", "initial")
+
+            with working_directory(repo_path):
+                state_path = Path(git_auto_commit.auto_commit_state_path(str(repo_path)))
+                self.assertFalse(state_path.exists())
+                git_auto_commit.mark_auto_commit_started(str(repo_path))
+                self.assertTrue(state_path.exists())
+                git_auto_commit.clear_auto_commit_state(str(repo_path))
+                self.assertFalse(state_path.exists())
+
     def test_upstream_ahead_count_reads_fetched_remote_state(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             base_path = Path(temporary_directory)

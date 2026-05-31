@@ -1,12 +1,18 @@
 import subprocess
 import re
 import argparse
+import fcntl
 import os
 import time
 import sys
 from os import path
 
 from loguru import logger
+
+INDEX_LOCK_STALE_SECONDS = 60
+INDEX_LOCK_POLL_SECONDS = 10
+AUTO_COMMIT_LOCK_FILENAME = "git_auto_commit.lock"
+AUTO_COMMIT_STATE_FILENAME = "git_auto_commit.pending"
 
 
 def getAbsPathFromScript(relPath):
@@ -37,6 +43,19 @@ def getAbsPathFromPWD(relPath):
     fullPath = os.path.abspath(os.path.join(basepath, relPath))
 
     return fullPath
+
+
+def git_dir_path(repoAbsPath):
+    result = subprocess.run(
+        ["git", "rev-parse", "--git-dir"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    git_dir = result.stdout.strip()
+    if os.path.isabs(git_dir):
+        return git_dir
+    return os.path.abspath(os.path.join(repoAbsPath, git_dir))
 
 
 def generate_commit_message():
@@ -77,6 +96,39 @@ def exit_with_error(message, repoAbsPath):
     sys.exit(1)
 
 
+def acquire_auto_commit_lock(repoAbsPath):
+    lock_file = open(
+        os.path.join(git_dir_path(repoAbsPath), AUTO_COMMIT_LOCK_FILENAME),
+        "w",
+        encoding="utf-8",
+    )
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        logger.warning(
+            f"Another git auto-commit is running in repo {repoAbsPath}. Waiting."
+        )
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+    return lock_file
+
+
+def auto_commit_state_path(repoAbsPath):
+    return os.path.join(git_dir_path(repoAbsPath), AUTO_COMMIT_STATE_FILENAME)
+
+
+def mark_auto_commit_started(repoAbsPath):
+    state_path = auto_commit_state_path(repoAbsPath)
+    with open(state_path, "w", encoding="utf-8") as state_file:
+        state_file.write(f"pid={os.getpid()}\nstarted_at={time.time()}\n")
+
+
+def clear_auto_commit_state(repoAbsPath):
+    try:
+        os.remove(auto_commit_state_path(repoAbsPath))
+    except FileNotFoundError:
+        pass
+
+
 def has_staged_changes():
     result = subprocess.run(["git", "diff", "--cached", "--quiet", "--"])
     if result.returncode == 0:
@@ -84,6 +136,47 @@ def has_staged_changes():
     if result.returncode == 1:
         return True
     raise subprocess.CalledProcessError(result.returncode, result.args)
+
+
+def process_is_git_in_repo(pid, repoAbsPath):
+    if pid == os.getpid():
+        return False
+
+    proc_path = f"/proc/{pid}"
+    try:
+        with open(os.path.join(proc_path, "cmdline"), "rb") as cmdline_file:
+            command_parts = [
+                part.decode(errors="replace")
+                for part in cmdline_file.read().split(b"\0")
+                if part
+            ]
+        process_cwd = os.path.realpath(os.readlink(os.path.join(proc_path, "cwd")))
+    except (FileNotFoundError, ProcessLookupError, PermissionError, OSError):
+        return False
+
+    if not command_parts:
+        return False
+
+    executable_name = os.path.basename(command_parts[0])
+    if executable_name != "git":
+        return False
+
+    repo_real_path = os.path.realpath(repoAbsPath)
+    git_real_path = os.path.realpath(git_dir_path(repoAbsPath))
+    return process_cwd == repo_real_path or process_cwd.startswith(
+        repo_real_path + os.sep
+    ) or process_cwd == git_real_path or process_cwd.startswith(git_real_path + os.sep)
+
+
+def git_processes_in_repo(repoAbsPath):
+    pids = []
+    for pid_name in os.listdir("/proc"):
+        if not pid_name.isdigit():
+            continue
+        pid = int(pid_name)
+        if process_is_git_in_repo(pid, repoAbsPath):
+            pids.append(pid)
+    return pids
 
 
 def upstream_name():
@@ -127,16 +220,33 @@ def ensure_push_can_fast_forward(repoAbsPath):
 
 
 def wait_for_index_lock(repoAbsPath):
-    lock_file_path = os.path.join(repoAbsPath, ".git", "index.lock")
-    if not os.path.exists(lock_file_path):
-        return
+    lock_file_path = os.path.join(git_dir_path(repoAbsPath), "index.lock")
 
-    logger.warning(
-        f"{lock_file_path} exists in repo {repoAbsPath}. Waiting for other git operations to finish."
-    )
-    time.sleep(10)
-    if os.path.exists(lock_file_path):
-        exit_with_error("Git index lock still exists; leaving it untouched", repoAbsPath)
+    while os.path.exists(lock_file_path):
+        active_git_pids = git_processes_in_repo(repoAbsPath)
+        if active_git_pids:
+            logger.warning(
+                f"{lock_file_path} exists and git process(es) {active_git_pids} are active in repo {repoAbsPath}. Waiting."
+            )
+            time.sleep(INDEX_LOCK_POLL_SECONDS)
+            continue
+
+        lock_age_seconds = time.time() - os.path.getmtime(lock_file_path)
+        if lock_age_seconds < INDEX_LOCK_STALE_SECONDS:
+            wait_seconds = min(
+                INDEX_LOCK_POLL_SECONDS, INDEX_LOCK_STALE_SECONDS - lock_age_seconds
+            )
+            logger.warning(
+                f"{lock_file_path} exists in repo {repoAbsPath}. Waiting before treating it as stale."
+            )
+            time.sleep(wait_seconds)
+            continue
+
+        logger.warning(f"Removing stale git index lock {lock_file_path}.")
+        try:
+            os.remove(lock_file_path)
+        except FileNotFoundError:
+            return
 
 
 def main():
@@ -153,14 +263,22 @@ def main():
 
     os.chdir(repoAbsPath)
 
+    auto_commit_lock = acquire_auto_commit_lock(repoAbsPath)
     wait_for_index_lock(repoAbsPath)
     ensure_push_can_fast_forward(repoAbsPath)
 
     try:
         if has_staged_changes():
-            exit_with_error(
-                "Refusing to auto-commit pre-existing staged changes", repoAbsPath
+            if not os.path.exists(auto_commit_state_path(repoAbsPath)):
+                exit_with_error(
+                    "Refusing to auto-commit pre-existing staged changes", repoAbsPath
+                )
+            logger.warning(
+                f"Resuming staged changes from an earlier git auto-commit in repo {repoAbsPath}."
             )
+        else:
+            clear_auto_commit_state(repoAbsPath)
+            mark_auto_commit_started(repoAbsPath)
     except subprocess.CalledProcessError as e:
         exit_with_error(f"Could not inspect staged changes: {e}", repoAbsPath)
 
@@ -178,10 +296,12 @@ def main():
         custom_message = args.message if args.message else generate_commit_message()
         try:
             subprocess.run(["git", "commit", "-m", custom_message], check=True)
+            clear_auto_commit_state(repoAbsPath)
             logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
         except subprocess.CalledProcessError as e:
             exit_with_error(f"Commit failed: {e}", repoAbsPath)
     else:
+        clear_auto_commit_state(repoAbsPath)
         logger.info(f"No changes to commit in repo {repoAbsPath}. Pushing anyway.")
 
     try:
@@ -189,6 +309,8 @@ def main():
         logger.info(f"Push successful in repo {repoAbsPath}.")
     except subprocess.CalledProcessError as e:
         exit_with_error(f"Push failed: {e}", repoAbsPath)
+
+    auto_commit_lock.close()
 
 
 if __name__ == "__main__":
