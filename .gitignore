@@ -1,6 +1,9 @@
 .idea
 git-auto.iml
 git_auto_commit.log
+git_auto_commit.*.log
 .aider*
+.venv/
+__pycache__/
 
 **/node_modules/

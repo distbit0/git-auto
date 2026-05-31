@@ -2,10 +2,11 @@ import subprocess
 import re
 import argparse
 import os
-import logging
 import time
 import sys
 from os import path
+
+from loguru import logger
 
 
 def getAbsPathFromScript(relPath):
@@ -15,26 +16,19 @@ def getAbsPathFromScript(relPath):
     return fullPath
 
 
-# Configure root logger
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
-# File handler
-file_handler = logging.FileHandler(getAbsPathFromScript("git_auto_commit.log"))
-file_handler.setLevel(logging.INFO)
-
-# Stream handler to output logs to console
-stream_handler = logging.StreamHandler()
-stream_handler.setLevel(logging.INFO)
-
-# Formatter
-formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-file_handler.setFormatter(formatter)
-stream_handler.setFormatter(formatter)
-
-# Add handlers to root logger
-logger.addHandler(file_handler)
-logger.addHandler(stream_handler)
+logger.remove()
+logger.add(
+    sys.stderr,
+    level="INFO",
+    format="{time:YYYY-MM-DD HH:mm:ss,SSS} - {level} - {message}",
+)
+logger.add(
+    getAbsPathFromScript("git_auto_commit.log"),
+    level="INFO",
+    rotation="10 MB",
+    retention=5,
+    format="{time:YYYY-MM-DD HH:mm:ss,SSS} - {level} - {message}",
+)
 
 
 def getAbsPathFromPWD(relPath):
@@ -64,13 +58,85 @@ def generate_commit_message():
     return commit_message
 
 
-def check_git_process():
-    result = subprocess.run(["ps", "-ef"], capture_output=True, text=True)
-    lines = result.stdout.split("\n")
-    for line in lines:
-        if "git" in line.split():
-            return True
-    return False
+def notify_error(message, repoAbsPath):
+    subprocess.run(
+        [
+            "notify-send",
+            "Git AutoCommit Error",
+            f"{message}\nRepository: {repoAbsPath}",
+            "--urgency=critical",
+            "--icon=dialog-error",
+        ],
+        check=False,
+    )
+
+
+def exit_with_error(message, repoAbsPath):
+    logger.error(f"{message} in repo {repoAbsPath}.")
+    notify_error(message, repoAbsPath)
+    sys.exit(1)
+
+
+def has_staged_changes():
+    result = subprocess.run(["git", "diff", "--cached", "--quiet", "--"])
+    if result.returncode == 0:
+        return False
+    if result.returncode == 1:
+        return True
+    raise subprocess.CalledProcessError(result.returncode, result.args)
+
+
+def upstream_name():
+    result = subprocess.run(
+        ["git", "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip()
+
+
+def upstream_ahead_count(upstream):
+    result = subprocess.run(
+        ["git", "rev-list", "--left-right", "--count", f"HEAD...{upstream}"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    _local_ahead, upstream_ahead = result.stdout.split()
+    return int(upstream_ahead)
+
+
+def ensure_push_can_fast_forward(repoAbsPath):
+    upstream = upstream_name()
+    if not upstream:
+        exit_with_error("No upstream branch configured", repoAbsPath)
+
+    try:
+        subprocess.run(["git", "fetch", "--quiet"], check=True)
+        upstream_ahead = upstream_ahead_count(upstream)
+    except subprocess.CalledProcessError as e:
+        exit_with_error(f"Could not check upstream state: {e}", repoAbsPath)
+
+    if upstream_ahead:
+        exit_with_error(
+            f"Upstream {upstream} is ahead by {upstream_ahead} commit(s); pull or rebase before auto-commit",
+            repoAbsPath,
+        )
+
+
+def wait_for_index_lock(repoAbsPath):
+    lock_file_path = os.path.join(repoAbsPath, ".git", "index.lock")
+    if not os.path.exists(lock_file_path):
+        return
+
+    logger.warning(
+        f"{lock_file_path} exists in repo {repoAbsPath}. Waiting for other git operations to finish."
+    )
+    time.sleep(10)
+    if os.path.exists(lock_file_path):
+        exit_with_error("Git index lock still exists; leaving it untouched", repoAbsPath)
 
 
 def main():
@@ -87,49 +153,26 @@ def main():
 
     os.chdir(repoAbsPath)
 
-    lock_file_path = os.path.join(repoAbsPath, ".git", "index.lock")
+    wait_for_index_lock(repoAbsPath)
+    ensure_push_can_fast_forward(repoAbsPath)
 
-    if os.path.exists(lock_file_path):
-        logger.warning(
-            f"{lock_file_path} exists in repo {repoAbsPath}. Waiting for other git operations to finish."
-        )
-        time.sleep(10)
-        if os.path.exists(lock_file_path):
-            if check_git_process():
-                logger.error(
-                    f"Git process running in repo {repoAbsPath}. Waiting another 60 seconds"
-                )
-                time.sleep(60)
-            logger.warning(f"Removing lock file in repo {repoAbsPath} after waiting.")
-            os.remove(lock_file_path)
+    try:
+        if has_staged_changes():
+            exit_with_error(
+                "Refusing to auto-commit pre-existing staged changes", repoAbsPath
+            )
+    except subprocess.CalledProcessError as e:
+        exit_with_error(f"Could not inspect staged changes: {e}", repoAbsPath)
 
     try:
         subprocess.run(["git", "add", "."], check=True)
     except subprocess.CalledProcessError as e:
-        logger.error(f"Git add failed in repo {repoAbsPath}: {e}")
-        subprocess.run(
-            [
-                "notify-send",
-                "Git AutoCommit Error",
-                f"Git add failed: {e}\nRepository: {repoAbsPath}",
-                "--urgency=critical",
-                "--icon=dialog-error",
-            ]
-        )
-        sys.exit(1)
+        exit_with_error(f"Git add failed: {e}", repoAbsPath)
 
-    changes_in_index = subprocess.run(
-        ["git", "diff-index", "--quiet", "HEAD", "--"], capture_output=True, text=True
-    )
-    changes_not_staged = subprocess.run(
-        ["git", "status", "--porcelain", "--untracked-files=no"],
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-    has_changes_to_commit = not (
-        changes_in_index.returncode == 0 and not changes_not_staged
-    )
+    try:
+        has_changes_to_commit = has_staged_changes()
+    except subprocess.CalledProcessError as e:
+        exit_with_error(f"Could not inspect staged changes: {e}", repoAbsPath)
 
     if has_changes_to_commit:
         custom_message = args.message if args.message else generate_commit_message()
@@ -137,17 +180,7 @@ def main():
             subprocess.run(["git", "commit", "-m", custom_message], check=True)
             logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
         except subprocess.CalledProcessError as e:
-            logger.error(f"Commit failed in repo {repoAbsPath}: {e}")
-            subprocess.run(
-                [
-                    "notify-send",
-                    "Git AutoCommit Error",
-                    f"Commit failed: {e}\nRepository: {repoAbsPath}",
-                    "--urgency=critical",
-                    "--icon=dialog-error",
-                ]
-            )
-            sys.exit(1)
+            exit_with_error(f"Commit failed: {e}", repoAbsPath)
     else:
         logger.info(f"No changes to commit in repo {repoAbsPath}. Pushing anyway.")
 
@@ -155,17 +188,7 @@ def main():
         subprocess.run(["git", "push"], check=True)
         logger.info(f"Push successful in repo {repoAbsPath}.")
     except subprocess.CalledProcessError as e:
-        logger.error(f"Push failed in repo {repoAbsPath}: {e}")
-        subprocess.run(
-            [
-                "notify-send",
-                "Git AutoCommit Error",
-                f"Push failed: {e}\nRepository: {repoAbsPath}\nCheck internet connection",
-                "--urgency=critical",
-                "--icon=dialog-error",
-            ]
-        )
-        sys.exit(1)
+        exit_with_error(f"Push failed: {e}", repoAbsPath)
 
 
 if __name__ == "__main__":
