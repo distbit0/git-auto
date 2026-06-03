@@ -6,3 +6,4 @@
 - It should abort when the upstream branch is ahead, so it does not create extra local commits when a push cannot fast-forward.
 - A lingering `.git/index.lock` should be removed only after it is stale and no Git process is still active in the repo. This lets auto-commit recover from a crashed prior Git operation without deleting a live Git lock.
 - The original divergence is better prevented by not rewriting/amending commits that have already been pushed. With that rule, auto-commit taking over stable staged changes can at worst create an early commit that later work follows up, rather than causing a local/remote history split.
+- On 2026-06-03, `distbit.xyz` push failures were not root-cause diagnosable from the popup because failed subprocess stdout/stderr was discarded. Future git command failures should include captured stdout/stderr in the log and notification.

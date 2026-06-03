@@ -3,6 +3,7 @@ import re
 import argparse
 import fcntl
 import os
+import shlex
 import time
 import sys
 from os import path
@@ -96,6 +97,41 @@ def exit_with_error(message, repoAbsPath):
     logger.error(f"{message} in repo {repoAbsPath}.")
     notify_error(message, repoAbsPath)
     sys.exit(1)
+
+
+def command_display(command):
+    return " ".join(shlex.quote(str(part)) for part in command)
+
+
+def command_failure_message(command, returncode, stdout="", stderr=""):
+    message_parts = [f"{command_display(command)} exited with status {returncode}"]
+    for stream_name, stream_output in (("stdout", stdout), ("stderr", stderr)):
+        stream_output = stream_output.strip()
+        if stream_output:
+            message_parts.append(f"{stream_name}:\n{stream_output}")
+    return "\n".join(message_parts)
+
+
+def called_process_error_message(error):
+    return command_failure_message(
+        error.cmd,
+        error.returncode,
+        error.stdout or "",
+        error.stderr or "",
+    )
+
+
+def run_checked(command, failure_message, repoAbsPath):
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        failure_details = command_failure_message(
+            command, result.returncode, result.stdout, result.stderr
+        )
+        exit_with_error(
+            f"{failure_message}: {failure_details}",
+            repoAbsPath,
+        )
+    return result
 
 
 def acquire_auto_commit_lock(repoAbsPath):
@@ -217,11 +253,18 @@ def ensure_push_can_fast_forward(repoAbsPath):
     if not upstream:
         exit_with_error("No upstream branch configured", repoAbsPath)
 
+    run_checked(
+        ["git", "fetch", "--quiet"],
+        "Could not fetch upstream state",
+        repoAbsPath,
+    )
     try:
-        subprocess.run(["git", "fetch", "--quiet"], check=True)
         upstream_ahead = upstream_ahead_count(upstream)
     except subprocess.CalledProcessError as e:
-        exit_with_error(f"Could not check upstream state: {e}", repoAbsPath)
+        exit_with_error(
+            f"Could not check upstream state: {called_process_error_message(e)}",
+            repoAbsPath,
+        )
 
     if upstream_ahead:
         exit_with_error(
@@ -346,10 +389,7 @@ def main():
     except subprocess.CalledProcessError as e:
         exit_with_error(f"Could not inspect staged changes: {e}", repoAbsPath)
 
-    try:
-        subprocess.run(["git", "add", "."], check=True)
-    except subprocess.CalledProcessError as e:
-        exit_with_error(f"Git add failed: {e}", repoAbsPath)
+    run_checked(["git", "add", "."], "Git add failed", repoAbsPath)
 
     try:
         has_changes_to_commit = has_staged_changes()
@@ -358,21 +398,19 @@ def main():
 
     if has_changes_to_commit:
         custom_message = args.message if args.message else generate_commit_message()
-        try:
-            subprocess.run(["git", "commit", "-m", custom_message], check=True)
-            clear_auto_commit_state(repoAbsPath)
-            logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
-        except subprocess.CalledProcessError as e:
-            exit_with_error(f"Commit failed: {e}", repoAbsPath)
+        run_checked(
+            ["git", "commit", "-m", custom_message],
+            "Commit failed",
+            repoAbsPath,
+        )
+        clear_auto_commit_state(repoAbsPath)
+        logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
     else:
         clear_auto_commit_state(repoAbsPath)
         logger.info(f"No changes to commit in repo {repoAbsPath}. Pushing anyway.")
 
-    try:
-        subprocess.run(["git", "push"], check=True)
-        logger.info(f"Push successful in repo {repoAbsPath}.")
-    except subprocess.CalledProcessError as e:
-        exit_with_error(f"Push failed: {e}", repoAbsPath)
+    run_checked(["git", "push"], "Push failed", repoAbsPath)
+    logger.info(f"Push successful in repo {repoAbsPath}.")
 
     auto_commit_lock.close()
 

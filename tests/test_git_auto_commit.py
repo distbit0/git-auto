@@ -38,6 +38,25 @@ def working_directory(path):
 
 
 class GitAutoCommitTests(unittest.TestCase):
+    def test_command_failure_message_includes_git_stderr(self):
+        result = subprocess.run(
+            ["git", "definitely-not-a-git-command"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+
+        message = git_auto_commit.command_failure_message(
+            result.args,
+            result.returncode,
+            result.stdout,
+            result.stderr,
+        )
+
+        self.assertIn("git definitely-not-a-git-command exited with status", message)
+        self.assertIn("stderr:", message)
+        self.assertIn(result.stderr.strip().splitlines()[0], message)
+
     def test_has_staged_changes_detects_existing_index_work(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             repo_path = Path(temporary_directory)
