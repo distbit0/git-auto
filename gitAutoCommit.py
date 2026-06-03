@@ -11,6 +11,8 @@ from loguru import logger
 
 INDEX_LOCK_STALE_SECONDS = 60
 INDEX_LOCK_POLL_SECONDS = 10
+STAGED_TAKEOVER_WAIT_SECONDS = 30
+STAGED_TAKEOVER_POLL_SECONDS = 5
 AUTO_COMMIT_LOCK_FILENAME = "git_auto_commit.lock"
 AUTO_COMMIT_STATE_FILENAME = "git_auto_commit.pending"
 
@@ -138,6 +140,15 @@ def has_staged_changes():
     raise subprocess.CalledProcessError(result.returncode, result.args)
 
 
+def staged_diff_snapshot():
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--binary"],
+        capture_output=True,
+        check=True,
+    )
+    return result.stdout
+
+
 def process_is_git_in_repo(pid, repoAbsPath):
     if pid == os.getpid():
         return False
@@ -249,6 +260,55 @@ def wait_for_index_lock(repoAbsPath):
             return
 
 
+def wait_for_staged_changes_to_settle(repoAbsPath, wait_seconds, poll_seconds):
+    logger.warning(
+        f"Pre-existing staged changes found in repo {repoAbsPath}. Waiting up to {wait_seconds:g}s before auto-committing them."
+    )
+    previous_snapshot = staged_diff_snapshot()
+    deadline = time.monotonic() + wait_seconds
+
+    while time.monotonic() < deadline:
+        remaining_seconds = deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            break
+        time.sleep(min(max(poll_seconds, 0.1), remaining_seconds))
+        wait_for_index_lock(repoAbsPath)
+
+        if not has_staged_changes():
+            logger.info(
+                f"Pre-existing staged changes were cleared while waiting in repo {repoAbsPath}."
+            )
+            return
+
+        current_snapshot = staged_diff_snapshot()
+        if current_snapshot == previous_snapshot:
+            continue
+
+        logger.warning(
+            f"Staged changes changed while waiting in repo {repoAbsPath}. Restarting staged-change wait."
+        )
+        previous_snapshot = current_snapshot
+        deadline = time.monotonic() + wait_seconds
+
+    logger.warning(
+        f"Taking over stable pre-existing staged changes in repo {repoAbsPath}."
+    )
+
+
+def claim_staging_window(repoAbsPath, wait_seconds, poll_seconds):
+    if has_staged_changes():
+        if os.path.exists(auto_commit_state_path(repoAbsPath)):
+            logger.warning(
+                f"Resuming staged changes from an earlier git auto-commit in repo {repoAbsPath}."
+            )
+        else:
+            wait_for_staged_changes_to_settle(repoAbsPath, wait_seconds, poll_seconds)
+    else:
+        clear_auto_commit_state(repoAbsPath)
+
+    mark_auto_commit_started(repoAbsPath)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -256,6 +316,18 @@ def main():
     )
     parser.add_argument(
         "-p", "--path", help="Path to apply the git operations to", default="."
+    )
+    parser.add_argument(
+        "--staged-wait-seconds",
+        type=float,
+        default=STAGED_TAKEOVER_WAIT_SECONDS,
+        help="Seconds a pre-existing staged diff must stay stable before auto-commit takes it over",
+    )
+    parser.add_argument(
+        "--staged-poll-seconds",
+        type=float,
+        default=STAGED_TAKEOVER_POLL_SECONDS,
+        help="Seconds between staged-diff stability checks",
     )
     args = parser.parse_args()
 
@@ -268,17 +340,9 @@ def main():
     ensure_push_can_fast_forward(repoAbsPath)
 
     try:
-        if has_staged_changes():
-            if not os.path.exists(auto_commit_state_path(repoAbsPath)):
-                exit_with_error(
-                    "Refusing to auto-commit pre-existing staged changes", repoAbsPath
-                )
-            logger.warning(
-                f"Resuming staged changes from an earlier git auto-commit in repo {repoAbsPath}."
-            )
-        else:
-            clear_auto_commit_state(repoAbsPath)
-            mark_auto_commit_started(repoAbsPath)
+        claim_staging_window(
+            repoAbsPath, args.staged_wait_seconds, args.staged_poll_seconds
+        )
     except subprocess.CalledProcessError as e:
         exit_with_error(f"Could not inspect staged changes: {e}", repoAbsPath)
 

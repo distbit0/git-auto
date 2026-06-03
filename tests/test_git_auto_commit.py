@@ -1,6 +1,7 @@
 import importlib.util
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
@@ -127,6 +128,46 @@ class GitAutoCommitTests(unittest.TestCase):
             git(local_path, "fetch", "--quiet")
             with working_directory(local_path):
                 self.assertEqual(git_auto_commit.upstream_ahead_count("origin/master"), 1)
+
+    def test_pre_existing_staged_changes_are_committed_after_stable_wait(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = Path(temporary_directory)
+            remote_path = base_path / "remote.git"
+            local_path = base_path / "local"
+
+            git(base_path, "init", "--bare", remote_path)
+            git(base_path, "clone", remote_path, local_path)
+            git(local_path, "config", "user.email", "test@example.com")
+            git(local_path, "config", "user.name", "Git Auto Commit Test")
+
+            tracked_file = local_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(local_path, "add", "tracked.txt")
+            git(local_path, "commit", "-m", "initial")
+            git(local_path, "push", "-u", "origin", "master")
+
+            tracked_file.write_text(git(local_path, "rev-parse", "HEAD").stdout, encoding="utf-8")
+            git(local_path, "add", "tracked.txt")
+
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(MODULE_PATH),
+                    "-p",
+                    str(local_path),
+                    "--staged-wait-seconds",
+                    "0",
+                ],
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+
+            self.assertEqual(git(local_path, "status", "--short").stdout, "")
+            self.assertEqual(
+                git(local_path, "rev-parse", "HEAD").stdout,
+                git(local_path, "rev-parse", "origin/master").stdout,
+            )
 
 
 if __name__ == "__main__":
