@@ -16,6 +16,7 @@ STAGED_TAKEOVER_WAIT_SECONDS = 30
 STAGED_TAKEOVER_POLL_SECONDS = 5
 AUTO_COMMIT_LOCK_FILENAME = "git_auto_commit.lock"
 AUTO_COMMIT_STATE_FILENAME = "git_auto_commit.pending"
+PUSH_RECONCILE_ATTEMPTS = 2
 
 
 def getAbsPathFromScript(relPath):
@@ -238,39 +239,139 @@ def upstream_name():
 
 
 def upstream_ahead_count(upstream):
+    _local_ahead, upstream_ahead = branch_divergence(upstream)
+    return upstream_ahead
+
+
+def branch_divergence(upstream):
     result = subprocess.run(
         ["git", "rev-list", "--left-right", "--count", f"HEAD...{upstream}"],
         capture_output=True,
         text=True,
         check=True,
     )
-    _local_ahead, upstream_ahead = result.stdout.split()
-    return int(upstream_ahead)
+    local_ahead, upstream_ahead = result.stdout.split()
+    return int(local_ahead), int(upstream_ahead)
 
 
-def ensure_push_can_fast_forward(repoAbsPath):
+def has_local_commits_to_push(repoAbsPath):
     upstream = upstream_name()
     if not upstream:
-        exit_with_error("No upstream branch configured", repoAbsPath)
+        return True
 
-    run_checked(
-        ["git", "fetch", "--quiet"],
-        "Could not fetch upstream state",
-        repoAbsPath,
-    )
     try:
-        upstream_ahead = upstream_ahead_count(upstream)
+        local_ahead, _upstream_ahead = branch_divergence(upstream)
     except subprocess.CalledProcessError as e:
         exit_with_error(
-            f"Could not check upstream state: {called_process_error_message(e)}",
+            f"Could not inspect local branch state: {called_process_error_message(e)}",
+            repoAbsPath,
+        )
+    return local_ahead > 0
+
+
+def push_was_rejected_for_remote_updates(result):
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    return (
+        "[rejected]" in output
+        and (
+            "fetch first" in output
+            or "non-fast-forward" in output
+            or "stale info" in output
+        )
+    )
+
+
+def push_failure_message(result):
+    return command_failure_message(
+        result.args, result.returncode, result.stdout, result.stderr
+    )
+
+
+def abort_rebase_details():
+    result = subprocess.run(
+        ["git", "rebase", "--abort"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        return "Rebase was aborted; local commits were left unapplied to the fetched upstream."
+    return "Could not abort failed rebase:\n" + push_failure_message(result)
+
+
+def rebase_onto_upstream(repoAbsPath, upstream):
+    result = subprocess.run(
+        ["git", "rebase", upstream],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        logger.info(f"Rebased local commits onto {upstream} in repo {repoAbsPath}.")
+        return
+
+    rebase_failure = push_failure_message(result)
+    abort_details = abort_rebase_details()
+    exit_with_error(
+        f"Could not automatically rebase onto {upstream}; manual resolution required.\n{rebase_failure}\n{abort_details}",
+        repoAbsPath,
+    )
+
+
+def reconcile_remote_updates(repoAbsPath, push_result):
+    upstream = upstream_name()
+    if not upstream:
+        exit_with_error(
+            f"Push failed and no upstream branch is configured: {push_failure_message(push_result)}",
             repoAbsPath,
         )
 
-    if upstream_ahead:
+    logger.warning(
+        f"Push was rejected because {upstream} changed. Fetching and rebasing local commits."
+    )
+    run_checked(
+        ["git", "fetch", "--quiet"],
+        "Could not fetch upstream state after push rejection",
+        repoAbsPath,
+    )
+
+    try:
+        local_ahead, upstream_ahead = branch_divergence(upstream)
+    except subprocess.CalledProcessError as e:
         exit_with_error(
-            f"Upstream {upstream} is ahead by {upstream_ahead} commit(s); pull or rebase before auto-commit",
+            f"Could not inspect fetched upstream state: {called_process_error_message(e)}",
             repoAbsPath,
         )
+
+    if upstream_ahead == 0:
+        exit_with_error(
+            f"Push was rejected, but fetched {upstream} is not ahead: {push_failure_message(push_result)}",
+            repoAbsPath,
+        )
+    if local_ahead == 0:
+        logger.info(
+            f"Fetched {upstream}; no local commits remain to push in repo {repoAbsPath}."
+        )
+        return
+
+    rebase_onto_upstream(repoAbsPath, upstream)
+
+
+def push_with_auto_reconcile(repoAbsPath):
+    for reconcile_attempt in range(PUSH_RECONCILE_ATTEMPTS + 1):
+        result = subprocess.run(["git", "push"], capture_output=True, text=True)
+        if result.returncode == 0:
+            logger.info(f"Push successful in repo {repoAbsPath}.")
+            return
+
+        if not push_was_rejected_for_remote_updates(result):
+            exit_with_error(f"Push failed: {push_failure_message(result)}", repoAbsPath)
+
+        if reconcile_attempt == PUSH_RECONCILE_ATTEMPTS:
+            exit_with_error(
+                f"Push was repeatedly rejected after automatic reconciliation: {push_failure_message(result)}",
+                repoAbsPath,
+            )
+
+        reconcile_remote_updates(repoAbsPath, result)
 
 
 def wait_for_index_lock(repoAbsPath):
@@ -380,7 +481,6 @@ def main():
 
     auto_commit_lock = acquire_auto_commit_lock(repoAbsPath)
     wait_for_index_lock(repoAbsPath)
-    ensure_push_can_fast_forward(repoAbsPath)
 
     try:
         claim_staging_window(
@@ -407,10 +507,13 @@ def main():
         logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
     else:
         clear_auto_commit_state(repoAbsPath)
-        logger.info(f"No changes to commit in repo {repoAbsPath}. Pushing anyway.")
+        if not has_local_commits_to_push(repoAbsPath):
+            logger.info(f"No changes or local commits to push in repo {repoAbsPath}.")
+            auto_commit_lock.close()
+            return
+        logger.info(f"No changes to commit in repo {repoAbsPath}. Pushing local commits.")
 
-    run_checked(["git", "push"], "Push failed", repoAbsPath)
-    logger.info(f"Push successful in repo {repoAbsPath}.")
+    push_with_auto_reconcile(repoAbsPath)
 
     auto_commit_lock.close()
 

@@ -27,6 +27,29 @@ def command_output(*args):
     return subprocess.run(args, capture_output=True, check=True, text=True).stdout
 
 
+def configure_test_repo(repo_path):
+    git(repo_path, "config", "user.email", "test@example.com")
+    git(repo_path, "config", "user.name", "Git Auto Commit Test")
+    hooks_path = Path(repo_path) / ".git" / "test-hooks"
+    hooks_path.mkdir()
+    git(repo_path, "config", "core.hooksPath", str(hooks_path))
+
+
+def run_auto_commit(repo_path, *args, check=True):
+    return subprocess.run(
+        [
+            sys.executable,
+            str(MODULE_PATH),
+            "-p",
+            str(repo_path),
+            *args,
+        ],
+        capture_output=True,
+        check=check,
+        text=True,
+    )
+
+
 @contextmanager
 def working_directory(path):
     previous_directory = os.getcwd()
@@ -61,8 +84,7 @@ class GitAutoCommitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             repo_path = Path(temporary_directory)
             git(repo_path, "init", "-b", "master")
-            git(repo_path, "config", "user.email", "test@example.com")
-            git(repo_path, "config", "user.name", "Git Auto Commit Test")
+            configure_test_repo(repo_path)
 
             tracked_file = repo_path / "tracked.txt"
             tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
@@ -97,8 +119,7 @@ class GitAutoCommitTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary_directory:
             repo_path = Path(temporary_directory)
             git(repo_path, "init", "-b", "master")
-            git(repo_path, "config", "user.email", "test@example.com")
-            git(repo_path, "config", "user.name", "Git Auto Commit Test")
+            configure_test_repo(repo_path)
 
             tracked_file = repo_path / "tracked.txt"
             tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
@@ -125,8 +146,7 @@ class GitAutoCommitTests(unittest.TestCase):
             git(base_path, "clone", remote_path, other_path)
 
             for repo_path in (local_path, other_path):
-                git(repo_path, "config", "user.email", "test@example.com")
-                git(repo_path, "config", "user.name", "Git Auto Commit Test")
+                configure_test_repo(repo_path)
 
             tracked_file = local_path / "tracked.txt"
             tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
@@ -156,8 +176,7 @@ class GitAutoCommitTests(unittest.TestCase):
 
             git(base_path, "init", "--bare", remote_path)
             git(base_path, "clone", remote_path, local_path)
-            git(local_path, "config", "user.email", "test@example.com")
-            git(local_path, "config", "user.name", "Git Auto Commit Test")
+            configure_test_repo(local_path)
 
             tracked_file = local_path / "tracked.txt"
             tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
@@ -168,25 +187,141 @@ class GitAutoCommitTests(unittest.TestCase):
             tracked_file.write_text(git(local_path, "rev-parse", "HEAD").stdout, encoding="utf-8")
             git(local_path, "add", "tracked.txt")
 
-            subprocess.run(
-                [
-                    sys.executable,
-                    str(MODULE_PATH),
-                    "-p",
-                    str(local_path),
-                    "--staged-wait-seconds",
-                    "0",
-                ],
-                capture_output=True,
-                check=True,
-                text=True,
-            )
+            run_auto_commit(local_path, "--staged-wait-seconds", "0")
 
             self.assertEqual(git(local_path, "status", "--short").stdout, "")
             self.assertEqual(
                 git(local_path, "rev-parse", "HEAD").stdout,
                 git(local_path, "rev-parse", "origin/master").stdout,
             )
+
+    def test_clean_synced_repo_skips_push(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = Path(temporary_directory)
+            remote_path = base_path / "remote.git"
+            local_path = base_path / "local"
+
+            git(base_path, "init", "--bare", remote_path)
+            git(base_path, "clone", remote_path, local_path)
+            configure_test_repo(local_path)
+
+            tracked_file = local_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(local_path, "add", "tracked.txt")
+            git(local_path, "commit", "-m", "initial")
+            git(local_path, "push", "-u", "origin", "master")
+            git(local_path, "config", "remote.origin.pushurl", str(base_path / "missing.git"))
+
+            result = run_auto_commit(local_path)
+
+            self.assertIn("No changes or local commits to push", result.stderr)
+
+    def test_clean_local_ahead_repo_pushes_existing_commits(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = Path(temporary_directory)
+            remote_path = base_path / "remote.git"
+            local_path = base_path / "local"
+
+            git(base_path, "init", "--bare", remote_path)
+            git(base_path, "clone", remote_path, local_path)
+            configure_test_repo(local_path)
+
+            tracked_file = local_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(local_path, "add", "tracked.txt")
+            git(local_path, "commit", "-m", "initial")
+            git(local_path, "push", "-u", "origin", "master")
+
+            tracked_file.write_text(git(local_path, "rev-parse", "HEAD").stdout, encoding="utf-8")
+            git(local_path, "commit", "-am", "local update")
+
+            run_auto_commit(local_path)
+            git(local_path, "fetch", "--quiet")
+
+            self.assertEqual(
+                git(local_path, "rev-parse", "HEAD").stdout,
+                git(local_path, "rev-parse", "origin/master").stdout,
+            )
+
+    def test_remote_update_is_rebased_and_pushed(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = Path(temporary_directory)
+            remote_path = base_path / "remote.git"
+            local_path = base_path / "local"
+            other_path = base_path / "other"
+
+            git(base_path, "init", "--bare", remote_path)
+            git(base_path, "clone", remote_path, local_path)
+            git(base_path, "clone", remote_path, other_path)
+
+            for repo_path in (local_path, other_path):
+                configure_test_repo(repo_path)
+
+            tracked_file = local_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(local_path, "add", "tracked.txt")
+            git(local_path, "commit", "-m", "initial")
+            git(local_path, "push", "-u", "origin", "master")
+
+            git(other_path, "pull", "--ff-only")
+            remote_file = other_path / "remote.txt"
+            remote_file.write_text(git(other_path, "rev-parse", "HEAD").stdout, encoding="utf-8")
+            git(other_path, "add", "remote.txt")
+            git(other_path, "commit", "-m", "remote update")
+            git(other_path, "push")
+
+            local_file = local_path / "local.txt"
+            local_file.write_text(git(local_path, "rev-parse", "HEAD").stdout, encoding="utf-8")
+
+            result = run_auto_commit(local_path)
+            git(local_path, "fetch", "--quiet")
+
+            self.assertIn("Fetching and rebasing local commits", result.stderr)
+            self.assertEqual(
+                git(local_path, "rev-parse", "HEAD").stdout,
+                git(local_path, "rev-parse", "origin/master").stdout,
+            )
+
+    def test_rebase_conflict_aborts_and_reports_manual_resolution(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = Path(temporary_directory)
+            remote_path = base_path / "remote.git"
+            local_path = base_path / "local"
+            other_path = base_path / "other"
+
+            git(base_path, "init", "--bare", remote_path)
+            git(base_path, "clone", remote_path, local_path)
+            git(base_path, "clone", remote_path, other_path)
+
+            for repo_path in (local_path, other_path):
+                configure_test_repo(repo_path)
+
+            tracked_file = local_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(local_path, "add", "tracked.txt")
+            git(local_path, "commit", "-m", "initial")
+            git(local_path, "push", "-u", "origin", "master")
+
+            git(other_path, "pull", "--ff-only")
+            other_tracked_file = other_path / "tracked.txt"
+            other_tracked_file.write_text(
+                git(other_path, "rev-parse", "--show-toplevel").stdout,
+                encoding="utf-8",
+            )
+            git(other_path, "commit", "-am", "remote update")
+            git(other_path, "push")
+
+            tracked_file.write_text(
+                git(local_path, "rev-parse", "--show-toplevel").stdout,
+                encoding="utf-8",
+            )
+
+            result = run_auto_commit(local_path, check=False)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("manual resolution required", result.stderr)
+            self.assertEqual(git(local_path, "status", "--short").stdout, "")
+            self.assertFalse((local_path / ".git" / "rebase-merge").exists())
 
 
 if __name__ == "__main__":
