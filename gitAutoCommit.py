@@ -7,6 +7,7 @@ import shlex
 import time
 import sys
 from os import path
+from pathlib import Path
 
 from loguru import logger
 
@@ -17,6 +18,7 @@ STAGED_TAKEOVER_POLL_SECONDS = 5
 AUTO_COMMIT_LOCK_FILENAME = "git_auto_commit.lock"
 AUTO_COMMIT_STATE_FILENAME = "git_auto_commit.pending"
 PUSH_RECONCILE_ATTEMPTS = 2
+DESKTOP_ERROR_LOGGER = Path("/home/pimania/dev/misc/automation/log_desktop_error.sh")
 
 
 def getAbsPathFromScript(relPath):
@@ -82,6 +84,22 @@ def generate_commit_message():
 
 
 def notify_error(message, repoAbsPath):
+    try:
+        subprocess.run(
+            [
+                DESKTOP_ERROR_LOGGER,
+                "git-auto",
+                "Git AutoCommit Error",
+                message,
+                f"repository={repoAbsPath}",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except Exception as exc:
+        logger.warning(f"Failed to append desktop error log: {exc}")
+
     subprocess.run(
         [
             "notify-send",
