@@ -6,6 +6,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).resolve().parents[1] / "gitAutoCommit.py"
@@ -36,6 +37,10 @@ def configure_test_repo(repo_path):
 
 
 def run_auto_commit(repo_path, *args, check=True):
+    environment = {
+        **os.environ,
+        "GIT_AUTO_DESKTOP_ERROR_LOGGER": "/usr/bin/true",
+    }
     return subprocess.run(
         [
             sys.executable,
@@ -46,6 +51,7 @@ def run_auto_commit(repo_path, *args, check=True):
         ],
         capture_output=True,
         check=check,
+        env=environment,
         text=True,
     )
 
@@ -61,6 +67,39 @@ def working_directory(path):
 
 
 class GitAutoCommitTests(unittest.TestCase):
+    def test_commit_retries_captured_gitguardian_dns_failure(self):
+        captured_failure_path = (
+            Path(__file__).parent / "fixtures" / "gitguardian_dns_failure.txt"
+        )
+        captured_failure = captured_failure_path.read_text(encoding="utf-8")
+        failed_commit = subprocess.CompletedProcess(
+            ["git", "commit", "-m", "inbox-index.md"],
+            1,
+            stdout="",
+            stderr=captured_failure,
+        )
+        successful_commit = subprocess.CompletedProcess(
+            failed_commit.args,
+            0,
+            stdout="[master captured] inbox-index.md\n",
+            stderr="",
+        )
+
+        with mock.patch.object(
+            git_auto_commit.subprocess,
+            "run",
+            side_effect=[failed_commit, failed_commit, successful_commit],
+        ) as run_command, mock.patch.object(git_auto_commit.time, "sleep") as sleep:
+            result = git_auto_commit.commit_with_dns_retry(
+                "inbox-index.md",
+                "/home/pimania/notes",
+                retry_delay_seconds=0,
+            )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(run_command.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
     def test_command_failure_message_includes_git_stderr(self):
         result = subprocess.run(
             ["git", "definitely-not-a-git-command"],

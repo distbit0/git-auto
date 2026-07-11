@@ -1,0 +1,2 @@
+Error: Failed to connect to GitGuardian server. Check your instance URL settings.
+Details: HTTPSConnectionPool(host='api.gitguardian.com', port=443): Max retries exceeded with url: /v1/metadata (Caused by NameResolutionError("HTTPSConnection(host='api.gitguardian.com', port=443): Failed to resolve 'api.gitguardian.com' ([Errno -3] Temporary failure in name resolution)"))

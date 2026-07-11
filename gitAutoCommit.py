@@ -18,7 +18,14 @@ STAGED_TAKEOVER_POLL_SECONDS = 5
 AUTO_COMMIT_LOCK_FILENAME = "git_auto_commit.lock"
 AUTO_COMMIT_STATE_FILENAME = "git_auto_commit.pending"
 PUSH_RECONCILE_ATTEMPTS = 2
-DESKTOP_ERROR_LOGGER = Path("/home/pimania/dev/misc/automation/log_desktop_error.sh")
+COMMIT_ATTEMPTS = 3
+COMMIT_RETRY_DELAY_SECONDS = 2
+DESKTOP_ERROR_LOGGER = Path(
+    os.environ.get(
+        "GIT_AUTO_DESKTOP_ERROR_LOGGER",
+        "/home/pimania/dev/misc/automation/log_desktop_error.sh",
+    )
+)
 
 
 def getAbsPathFromScript(relPath):
@@ -151,6 +158,40 @@ def run_checked(command, failure_message, repoAbsPath):
             repoAbsPath,
         )
     return result
+
+
+def is_gitguardian_dns_failure(result):
+    output = f"{result.stdout}\n{result.stderr}"
+    return "Failed to connect to GitGuardian server" in output and (
+        "NameResolutionError" in output
+        or "Temporary failure in name resolution" in output
+    )
+
+
+def commit_with_dns_retry(
+    commit_message,
+    repoAbsPath,
+    attempts=COMMIT_ATTEMPTS,
+    retry_delay_seconds=COMMIT_RETRY_DELAY_SECONDS,
+):
+    command = ["git", "commit", "-m", commit_message]
+    for attempt in range(1, attempts + 1):
+        result = subprocess.run(command, capture_output=True, text=True)
+        if result.returncode == 0:
+            return result
+        if not is_gitguardian_dns_failure(result) or attempt == attempts:
+            failure_details = command_failure_message(
+                command, result.returncode, result.stdout, result.stderr
+            )
+            exit_with_error(f"Commit failed: {failure_details}", repoAbsPath)
+
+        logger.warning(
+            "GitGuardian DNS resolution failed during commit "
+            f"(attempt {attempt}/{attempts}); retrying in {retry_delay_seconds:g}s."
+        )
+        time.sleep(retry_delay_seconds)
+
+    raise AssertionError("Commit retry loop exited unexpectedly")
 
 
 def acquire_auto_commit_lock(repoAbsPath):
@@ -516,11 +557,7 @@ def main():
 
     if has_changes_to_commit:
         custom_message = args.message if args.message else generate_commit_message()
-        run_checked(
-            ["git", "commit", "-m", custom_message],
-            "Commit failed",
-            repoAbsPath,
-        )
+        commit_with_dns_retry(custom_message, repoAbsPath)
         clear_auto_commit_state(repoAbsPath)
         logger.info(f"Commit successful in repo {repoAbsPath}. Pushing to remote.")
     else:
