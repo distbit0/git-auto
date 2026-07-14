@@ -8,4 +8,4 @@
 - The original divergence is better prevented by not rewriting/amending commits that have already been pushed. With that rule, auto-commit taking over stable staged changes can at worst create an early commit that later work follows up, rather than causing a local/remote history split.
 - On 2026-06-03, `distbit.xyz` push failures were not root-cause diagnosable from the popup because failed subprocess stdout/stderr was discarded. Future git command failures should include captured stdout/stderr in the log and notification.
 - GitGuardian's global pre-commit hook requires network metadata. Auto-commit retries only its captured DNS-resolution failure three times; other hook failures still stop immediately, and an exhausted DNS retry remains a visible desktop error.
-- Integration tests point `GIT_AUTO_DESKTOP_ERROR_LOGGER` at a non-recording executable so intentional failure cases cannot pollute the shared operational error log; normal runs keep the fixed logger path.
+- Integration tests point `GIT_AUTO_ERROR_INBOX_PATH` at `/dev/null` so intentional failure cases cannot pollute the real notes inbox; normal runs append errors to `~/notes/inbox-index.md`.

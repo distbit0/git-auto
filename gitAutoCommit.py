@@ -20,10 +20,10 @@ AUTO_COMMIT_STATE_FILENAME = "git_auto_commit.pending"
 PUSH_RECONCILE_ATTEMPTS = 2
 COMMIT_ATTEMPTS = 3
 COMMIT_RETRY_DELAY_SECONDS = 2
-DESKTOP_ERROR_LOGGER = Path(
+ERROR_INBOX_PATH = Path(
     os.environ.get(
-        "GIT_AUTO_DESKTOP_ERROR_LOGGER",
-        "/home/pimania/dev/misc/automation/log_desktop_error.sh",
+        "GIT_AUTO_ERROR_INBOX_PATH",
+        Path.home() / "notes/inbox-index.md",
     )
 )
 
@@ -90,22 +90,23 @@ def generate_commit_message():
     return commit_message
 
 
-def notify_error(message, repoAbsPath):
+def append_error_to_inbox(message, repoAbsPath):
+    indented_message = "\n".join(f"    {line}" for line in message.splitlines())
+    entry = (
+        "\n\ngit auto-commit error:\n"
+        f"repository: {repoAbsPath}\n\n"
+        f"{indented_message}\n"
+    )
+
     try:
-        subprocess.run(
-            [
-                DESKTOP_ERROR_LOGGER,
-                "git-auto",
-                "Git AutoCommit Error",
-                message,
-                f"repository={repoAbsPath}",
-            ],
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception as exc:
-        logger.warning(f"Failed to append desktop error log: {exc}")
+        with ERROR_INBOX_PATH.open("a", encoding="utf-8") as inbox_file:
+            inbox_file.write(entry)
+    except OSError as exc:
+        logger.warning(f"Failed to append auto-commit error to {ERROR_INBOX_PATH}: {exc}")
+
+
+def notify_error(message, repoAbsPath):
+    append_error_to_inbox(message, repoAbsPath)
 
     subprocess.run(
         [

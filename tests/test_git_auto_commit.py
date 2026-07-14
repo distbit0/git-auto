@@ -39,7 +39,7 @@ def configure_test_repo(repo_path):
 def run_auto_commit(repo_path, *args, check=True):
     environment = {
         **os.environ,
-        "GIT_AUTO_DESKTOP_ERROR_LOGGER": "/usr/bin/true",
+        "GIT_AUTO_ERROR_INBOX_PATH": "/dev/null",
     }
     return subprocess.run(
         [
@@ -67,6 +67,39 @@ def working_directory(path):
 
 
 class GitAutoCommitTests(unittest.TestCase):
+    def test_error_is_appended_to_inbox(self):
+        failed_command = subprocess.run(
+            ["git", "definitely-not-a-git-command"],
+            capture_output=True,
+            text=True,
+        )
+        self.assertNotEqual(failed_command.returncode, 0)
+        failure_message = git_auto_commit.command_failure_message(
+            failed_command.args,
+            failed_command.returncode,
+            failed_command.stdout,
+            failed_command.stderr,
+        )
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            inbox_path = Path(temporary_directory) / "inbox-index.md"
+            existing_content = command_output("git", "--version").strip()
+            inbox_path.write_text(existing_content, encoding="utf-8")
+
+            with mock.patch.object(git_auto_commit, "ERROR_INBOX_PATH", inbox_path):
+                git_auto_commit.append_error_to_inbox(
+                    failure_message,
+                    "/home/pimania/notes",
+                )
+
+            inbox_content = inbox_path.read_text(encoding="utf-8")
+
+        self.assertTrue(inbox_content.startswith(existing_content))
+        self.assertIn("git auto-commit error:", inbox_content)
+        self.assertIn("repository: /home/pimania/notes", inbox_content)
+        for failure_line in failure_message.splitlines():
+            self.assertIn(f"    {failure_line}", inbox_content)
+
     def test_commit_retries_captured_gitguardian_dns_failure(self):
         captured_failure_path = (
             Path(__file__).parent / "fixtures" / "gitguardian_dns_failure.txt"

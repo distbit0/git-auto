@@ -1,5 +1,11 @@
 # Decision Log
 
+## Route auto-commit failures to the notes inbox
+
+- Date: 2026-07-14
+- Decision: append `gitAutoCommit.py` failures directly to `~/notes/inbox-index.md` while retaining the critical desktop notification; do not send them to the shared `~/dev/error_log.txt` pipeline.
+- Rationale: auto-commit failures can require judgment about repository state, so the scheduled error-fixing skill must not claim and potentially resolve them automatically.
+
 ## Lazy remote reconciliation for `gp`
 
 - Date: 2026-06-27
