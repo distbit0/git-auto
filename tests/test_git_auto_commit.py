@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -205,6 +206,99 @@ class GitAutoCommitTests(unittest.TestCase):
                 self.assertTrue(state_path.exists())
                 git_auto_commit.clear_auto_commit_state(str(repo_path))
                 self.assertFalse(state_path.exists())
+
+    def test_active_pause_leaves_dirty_work_and_local_commits_unpushed(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = Path(temporary_directory)
+            remote_path = base_path / "remote.git"
+            local_path = base_path / "local"
+
+            git(base_path, "init", "--bare", remote_path)
+            git(base_path, "clone", remote_path, local_path)
+            configure_test_repo(local_path)
+
+            tracked_file = local_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(local_path, "add", "tracked.txt")
+            git(local_path, "commit", "-m", "initial")
+            git(local_path, "push", "-u", "origin", "master")
+
+            pause_path = local_path / ".git" / git_auto_commit.AUTO_COMMIT_PAUSE_FILENAME
+            pause_path.touch()
+            tracked_file.write_text(git(local_path, "rev-parse", "HEAD").stdout, encoding="utf-8")
+            git(local_path, "commit", "-am", "protected commit")
+            uncommitted_file = local_path / "uncommitted.txt"
+            uncommitted_file.write_text(git(local_path, "status", "--short").stdout, encoding="utf-8")
+
+            result = run_auto_commit(local_path)
+
+            self.assertIn("Auto-commit paused", result.stderr)
+            self.assertTrue(pause_path.exists())
+            self.assertIn("?? uncommitted.txt", git(local_path, "status", "--short").stdout)
+            self.assertNotEqual(
+                git(local_path, "rev-parse", "HEAD").stdout,
+                git(local_path, "rev-parse", "origin/master").stdout,
+            )
+
+    def test_expired_pause_resumes_commit_and_push_then_is_removed(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = Path(temporary_directory)
+            remote_path = base_path / "remote.git"
+            local_path = base_path / "local"
+
+            git(base_path, "init", "--bare", remote_path)
+            git(base_path, "clone", remote_path, local_path)
+            configure_test_repo(local_path)
+
+            tracked_file = local_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(local_path, "add", "tracked.txt")
+            git(local_path, "commit", "-m", "initial")
+            git(local_path, "push", "-u", "origin", "master")
+
+            pause_path = local_path / ".git" / git_auto_commit.AUTO_COMMIT_PAUSE_FILENAME
+            pause_path.touch()
+            expired_at = time.time() - git_auto_commit.AUTO_COMMIT_PAUSE_SECONDS - 1
+            os.utime(pause_path, (expired_at, expired_at))
+            tracked_file.write_text(git(local_path, "rev-parse", "HEAD").stdout, encoding="utf-8")
+
+            result = run_auto_commit(local_path)
+
+            self.assertIn("Auto-commit pause expired", result.stderr)
+            self.assertFalse(pause_path.exists())
+            self.assertEqual(git(local_path, "status", "--short").stdout, "")
+            self.assertEqual(
+                git(local_path, "rev-parse", "HEAD").stdout,
+                git(local_path, "rev-parse", "origin/master").stdout,
+            )
+
+    def test_expired_pause_is_retained_when_push_fails(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = Path(temporary_directory)
+            remote_path = base_path / "remote.git"
+            local_path = base_path / "local"
+
+            git(base_path, "init", "--bare", remote_path)
+            git(base_path, "clone", remote_path, local_path)
+            configure_test_repo(local_path)
+
+            tracked_file = local_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(local_path, "add", "tracked.txt")
+            git(local_path, "commit", "-m", "initial")
+            git(local_path, "push", "-u", "origin", "master")
+
+            pause_path = local_path / ".git" / git_auto_commit.AUTO_COMMIT_PAUSE_FILENAME
+            pause_path.touch()
+            expired_at = time.time() - git_auto_commit.AUTO_COMMIT_PAUSE_SECONDS - 1
+            os.utime(pause_path, (expired_at, expired_at))
+            tracked_file.write_text(git(local_path, "rev-parse", "HEAD").stdout, encoding="utf-8")
+            git(local_path, "config", "remote.origin.pushurl", str(base_path / "missing.git"))
+
+            result = run_auto_commit(local_path, check=False)
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(pause_path.exists())
 
     def test_upstream_ahead_count_reads_fetched_remote_state(self):
         with tempfile.TemporaryDirectory() as temporary_directory:

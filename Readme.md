@@ -6,6 +6,8 @@ A Simple Shell Script To Commit And Push Automatically
 
 ## Usage
 
+Repositories containing `.git/git_auto_commit.pause` are skipped for fourteen days from the marker's modification time. After that period, the next successful run resumes normal commit/push behavior and removes the marker.
+
 Download the `git-auto` file
 
 ```

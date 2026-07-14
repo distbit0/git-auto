@@ -17,6 +17,8 @@ STAGED_TAKEOVER_WAIT_SECONDS = 30
 STAGED_TAKEOVER_POLL_SECONDS = 5
 AUTO_COMMIT_LOCK_FILENAME = "git_auto_commit.lock"
 AUTO_COMMIT_STATE_FILENAME = "git_auto_commit.pending"
+AUTO_COMMIT_PAUSE_FILENAME = "git_auto_commit.pause"
+AUTO_COMMIT_PAUSE_SECONDS = 14 * 24 * 60 * 60
 PUSH_RECONCILE_ATTEMPTS = 2
 COMMIT_ATTEMPTS = 3
 COMMIT_RETRY_DELAY_SECONDS = 2
@@ -213,6 +215,26 @@ def acquire_auto_commit_lock(repoAbsPath):
 
 def auto_commit_state_path(repoAbsPath):
     return os.path.join(git_dir_path(repoAbsPath), AUTO_COMMIT_STATE_FILENAME)
+
+
+def auto_commit_pause_path(repoAbsPath):
+    return os.path.join(git_dir_path(repoAbsPath), AUTO_COMMIT_PAUSE_FILENAME)
+
+
+def auto_commit_pause_remaining_seconds(repoAbsPath):
+    try:
+        created_at = os.path.getmtime(auto_commit_pause_path(repoAbsPath))
+    except FileNotFoundError:
+        return None
+    return max(0, AUTO_COMMIT_PAUSE_SECONDS - (time.time() - created_at))
+
+
+def clear_auto_commit_pause(repoAbsPath):
+    try:
+        os.remove(auto_commit_pause_path(repoAbsPath))
+    except FileNotFoundError:
+        return
+    logger.info(f"Removed expired auto-commit pause in repo {repoAbsPath}.")
 
 
 def mark_auto_commit_started(repoAbsPath):
@@ -543,6 +565,23 @@ def main():
     wait_for_index_lock(repoAbsPath)
 
     try:
+        pause_remaining_seconds = auto_commit_pause_remaining_seconds(repoAbsPath)
+    except OSError as error:
+        exit_with_error(f"Could not inspect auto-commit pause: {error}", repoAbsPath)
+
+    if pause_remaining_seconds is not None and pause_remaining_seconds > 0:
+        logger.info(
+            "Auto-commit paused for "
+            f"{pause_remaining_seconds / (24 * 60 * 60):.2f} more days in repo {repoAbsPath}."
+        )
+        auto_commit_lock.close()
+        return
+
+    pause_expired = pause_remaining_seconds == 0
+    if pause_expired:
+        logger.info(f"Auto-commit pause expired in repo {repoAbsPath}; resuming.")
+
+    try:
         claim_staging_window(
             repoAbsPath, args.staged_wait_seconds, args.staged_poll_seconds
         )
@@ -565,11 +604,16 @@ def main():
         clear_auto_commit_state(repoAbsPath)
         if not has_local_commits_to_push(repoAbsPath):
             logger.info(f"No changes or local commits to push in repo {repoAbsPath}.")
+            if pause_expired:
+                clear_auto_commit_pause(repoAbsPath)
             auto_commit_lock.close()
             return
         logger.info(f"No changes to commit in repo {repoAbsPath}. Pushing local commits.")
 
     push_with_auto_reconcile(repoAbsPath)
+
+    if pause_expired:
+        clear_auto_commit_pause(repoAbsPath)
 
     auto_commit_lock.close()
 
