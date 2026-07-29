@@ -108,24 +108,13 @@ def append_error_to_inbox(message, repoAbsPath):
         logger.warning(f"Failed to append auto-commit error to {ERROR_INBOX_PATH}: {exc}")
 
 
-def notify_error(message, repoAbsPath):
+def report_error(message, repoAbsPath):
     append_error_to_inbox(message, repoAbsPath)
-
-    subprocess.run(
-        [
-            "notify-send",
-            "Git AutoCommit Error",
-            f"{message}\nRepository: {repoAbsPath}",
-            "--urgency=critical",
-            "--icon=dialog-error",
-        ],
-        check=False,
-    )
 
 
 def exit_with_error(message, repoAbsPath):
     logger.error(f"{message} in repo {repoAbsPath}.")
-    notify_error(message, repoAbsPath)
+    report_error(message, repoAbsPath)
     sys.exit(1)
 
 
