@@ -24,6 +24,7 @@ AUTO_COMMIT_PAUSE_SECONDS = 14 * 24 * 60 * 60
 PUSH_RECONCILE_ATTEMPTS = 2
 COMMIT_ATTEMPTS = 3
 COMMIT_RETRY_DELAY_SECONDS = 2
+NETWORKMANAGER_CONNECTED_STATE = "full"
 ERROR_INBOX_PATH = Path(
     os.environ.get(
         "GIT_AUTO_ERROR_INBOX_PATH",
@@ -351,6 +352,43 @@ def remote_push_url(remote_name, repoAbsPath):
         f"Could not resolve push URL for remote {remote_name}",
         repoAbsPath,
     ).stdout.strip()
+
+
+def remote_requires_internet(push_url):
+    return not (
+        push_url.startswith(("file://", "/", "./", "../")) or ":" not in push_url
+    )
+
+
+def remote_has_internet_connectivity(push_url, repoAbsPath):
+    if not remote_requires_internet(push_url):
+        return True
+
+    command = ["nmcli", "-g", "CONNECTIVITY", "general"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True)
+    except OSError as error:
+        logger.warning(
+            "Skipping network Git operations because NetworkManager connectivity "
+            f"could not be checked: {error} in repo {repoAbsPath}."
+        )
+        return False
+
+    connectivity_state = result.stdout.strip()
+    if result.returncode != 0 or not connectivity_state:
+        logger.warning(
+            "Skipping network Git operations because NetworkManager connectivity "
+            f"could not be determined: {command_failure_message(command, result.returncode, result.stdout, result.stderr)} "
+            f"in repo {repoAbsPath}."
+        )
+        return False
+    if connectivity_state != NETWORKMANAGER_CONNECTED_STATE:
+        logger.info(
+            "Skipping network Git operations because NetworkManager reports "
+            f"{connectivity_state} internet connectivity in repo {repoAbsPath}."
+        )
+        return False
+    return True
 
 
 def remote_permission_cache_path(repoAbsPath):
@@ -748,6 +786,9 @@ def main():
 
     remote_name = push_remote_name(repoAbsPath)
     push_url = remote_push_url(remote_name, repoAbsPath)
+    if not remote_has_internet_connectivity(push_url, repoAbsPath):
+        auto_commit_lock.close()
+        return
     if not remote_allows_writes(remote_name, push_url, repoAbsPath):
         if pause_expired:
             clear_auto_commit_pause(repoAbsPath)
@@ -783,6 +824,9 @@ def main():
             return
         logger.info(f"No changes to commit in repo {repoAbsPath}. Pushing local commits.")
 
+    if not remote_has_internet_connectivity(push_url, repoAbsPath):
+        auto_commit_lock.close()
+        return
     push_with_auto_reconcile(repoAbsPath, remote_name, push_url)
 
     if pause_expired:

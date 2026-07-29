@@ -8,7 +8,9 @@ A Simple Shell Script To Commit And Push Automatically
 
 Repositories containing `.git/git_auto_commit.pause` are skipped for fourteen days from the marker's modification time. After that period, the next successful run resumes normal commit/push behavior and removes the marker.
 
-Before changing a repository, Git Auto verifies that the configured push remote is writable with a dry-run push. The result is cached by push URL inside `.git`; read-only repositories are left untouched on later runs. Remove `.git/git_auto_commit.remote_write` to recheck permissions after an account or repository permission changes.
+Before changing a repository with a network remote, Git Auto requires NetworkManager to report full internet connectivity. Offline, limited, captive-portal, and indeterminate states leave the repository untouched and are retried by a later run.
+
+Git Auto then verifies that the configured push remote is writable with a dry-run push. The result is cached by push URL inside `.git`; read-only repositories are left untouched on later runs. Remove `.git/git_auto_commit.remote_write` to recheck permissions after an account or repository permission changes.
 
 Download the `git-auto` file
 

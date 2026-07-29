@@ -1,11 +1,11 @@
 # Decision Log
 
-## Cache remote write permission before changing a repository
+## Check connectivity and remote write permission before changing a repository
 
 - Date: 2026-07-29
-- Decision: before staging, committing, or pushing publishable work, verify the selected push remote with a non-mutating dry-run push and cache the result inside the repository by push URL. A cached or newly detected write denial skips the repository without changing it; ambiguous network or authentication failures remain explicit errors and are not cached.
-- Rationale: scheduled discovery includes upstream checkouts under `~/dev`; those repositories must not accumulate automatic local commits or repeated failed pushes merely because their remotes are readable.
-- Trade-off: cached permissions persist until the push URL changes or the cache is manually removed. A real push denial replaces a stale writable result with read-only.
+- Decision: for network remotes, require NetworkManager to report full internet connectivity before the permission probe and recheck before pushing. An offline or indeterminate state skips network operations without an error. Before staging publishable work, verify the selected push remote with a non-mutating dry-run push and cache the result inside the repository by push URL. A cached or newly detected write denial skips the repository without changing it.
+- Rationale: scheduled discovery includes upstream checkouts under `~/dev`; those repositories must not accumulate automatic local commits merely because their remotes are read-only or the machine is offline. Offline failures written to the notes inbox can otherwise create a self-sustaining commit/error loop.
+- Trade-off: a conservative or stale NetworkManager state can defer a reachable remote until a later scheduled run. Cached permissions persist until the push URL changes or the cache is manually removed; a real push denial replaces a stale writable result with read-only.
 
 ## Repository-local two-week auto-commit pauses
 

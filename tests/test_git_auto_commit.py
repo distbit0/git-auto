@@ -166,6 +166,90 @@ class GitAutoCommitTests(unittest.TestCase):
 
         self.assertTrue(git_auto_commit.push_permission_was_denied(denied_push))
 
+    def test_offline_network_remote_leaves_dirty_work_untouched(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            repo_path = Path(temporary_directory)
+            git(repo_path, "init", "-b", "master")
+            configure_test_repo(repo_path)
+
+            tracked_file = repo_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(repo_path, "add", "tracked.txt")
+            git(repo_path, "commit", "-m", "initial")
+            git(
+                repo_path,
+                "remote",
+                "add",
+                "origin",
+                "git@github.com:distbit0/git-auto.git",
+            )
+            original_head = git(repo_path, "rev-parse", "HEAD").stdout
+            tracked_file.write_text(original_head, encoding="utf-8")
+
+            with (
+                working_directory(repo_path),
+                mock.patch.object(
+                    sys,
+                    "argv",
+                    [str(MODULE_PATH), "-p", str(repo_path)],
+                ),
+                mock.patch.object(
+                    git_auto_commit,
+                    "remote_has_internet_connectivity",
+                    return_value=False,
+                ),
+                mock.patch.object(
+                    git_auto_commit,
+                    "remote_allows_writes",
+                ) as check_write_permission,
+            ):
+                git_auto_commit.main()
+
+            check_write_permission.assert_not_called()
+            self.assertEqual(git(repo_path, "rev-parse", "HEAD").stdout, original_head)
+            self.assertIn(" M tracked.txt", git(repo_path, "status", "--short").stdout)
+
+    def test_local_remote_does_not_require_networkmanager(self):
+        with mock.patch.object(
+            git_auto_commit.subprocess,
+            "run",
+        ) as run_command:
+            self.assertTrue(
+                git_auto_commit.remote_has_internet_connectivity(
+                    "/tmp/repository.git",
+                    "/tmp/local",
+                )
+            )
+
+        run_command.assert_not_called()
+
+    def test_network_remote_is_skipped_without_full_connectivity(self):
+        connectivity_command = ["nmcli", "-g", "CONNECTIVITY", "general"]
+        disconnected_result = subprocess.CompletedProcess(
+            connectivity_command,
+            0,
+            stdout="none\n",
+            stderr="",
+        )
+
+        with mock.patch.object(
+            git_auto_commit.subprocess,
+            "run",
+            return_value=disconnected_result,
+        ) as run_command:
+            self.assertFalse(
+                git_auto_commit.remote_has_internet_connectivity(
+                    "git@github.com:distbit0/git-auto.git",
+                    "/home/pimania/dev/git-auto",
+                )
+            )
+
+        run_command.assert_called_once_with(
+            connectivity_command,
+            capture_output=True,
+            text=True,
+        )
+
     def test_has_staged_changes_detects_existing_index_work(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             repo_path = Path(temporary_directory)
