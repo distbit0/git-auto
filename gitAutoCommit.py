@@ -2,6 +2,7 @@ import subprocess
 import re
 import argparse
 import fcntl
+import hashlib
 import os
 import shlex
 import time
@@ -18,6 +19,7 @@ STAGED_TAKEOVER_POLL_SECONDS = 5
 AUTO_COMMIT_LOCK_FILENAME = "git_auto_commit.lock"
 AUTO_COMMIT_STATE_FILENAME = "git_auto_commit.pending"
 AUTO_COMMIT_PAUSE_FILENAME = "git_auto_commit.pause"
+REMOTE_PERMISSION_CACHE_FILENAME = "git_auto_commit.remote_write"
 AUTO_COMMIT_PAUSE_SECONDS = 14 * 24 * 60 * 60
 PUSH_RECONCILE_ATTEMPTS = 2
 COMMIT_ATTEMPTS = 3
@@ -28,8 +30,6 @@ ERROR_INBOX_PATH = Path(
         Path.home() / "notes/inbox-index.md",
     )
 )
-
-
 def getAbsPathFromScript(relPath):
     basepath = path.dirname(__file__)
     fullPath = path.abspath(path.join(basepath, relPath))
@@ -320,6 +320,138 @@ def upstream_name():
     return result.stdout.strip()
 
 
+def push_remote_name(repoAbsPath):
+    push_ref_result = subprocess.run(
+        [
+            "git",
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "@{push}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if push_ref_result.returncode == 0:
+        return push_ref_result.stdout.strip().split("/", 1)[0]
+
+    push_default_result = subprocess.run(
+        ["git", "config", "--get", "remote.pushDefault"],
+        capture_output=True,
+        text=True,
+    )
+    return push_default_result.stdout.strip() or "origin"
+
+
+def remote_push_url(remote_name, repoAbsPath):
+    if remote_name == ".":
+        return repoAbsPath
+    return run_checked(
+        ["git", "remote", "get-url", "--push", remote_name],
+        f"Could not resolve push URL for remote {remote_name}",
+        repoAbsPath,
+    ).stdout.strip()
+
+
+def remote_permission_cache_path(repoAbsPath):
+    return Path(git_dir_path(repoAbsPath)) / REMOTE_PERMISSION_CACHE_FILENAME
+
+
+def cached_remote_write_permission(push_url, repoAbsPath):
+    cache_path = remote_permission_cache_path(repoAbsPath)
+    try:
+        cached_url_hash, cached_permission = cache_path.read_text(
+            encoding="utf-8"
+        ).split()
+    except FileNotFoundError:
+        return None
+    except ValueError as error:
+        raise OSError(f"Invalid remote permission cache entry: {cache_path}") from error
+
+    if cached_url_hash != hashlib.sha256(push_url.encode()).hexdigest():
+        return None
+    if cached_permission == "writable":
+        return True
+    if cached_permission == "read-only":
+        return False
+    raise OSError(f"Invalid remote permission cache entry: {cache_path}")
+
+
+def cache_remote_write_permission(push_url, repoAbsPath, writable):
+    cache_path = remote_permission_cache_path(repoAbsPath)
+    push_url_hash = hashlib.sha256(push_url.encode()).hexdigest()
+    cache_path.write_text(
+        f"{push_url_hash} {'writable' if writable else 'read-only'}\n",
+        encoding="utf-8",
+    )
+
+
+def push_permission_was_denied(result):
+    output = f"{result.stdout}\n{result.stderr}".lower()
+    return any(
+        denial_message in output
+        for denial_message in (
+            "write access to repository not granted",
+            "you are not allowed to push code to this project",
+            "you are not allowed to upload code",
+            "permission denied for writing",
+        )
+    ) or ("permission to " in output and " denied to " in output)
+
+
+def remote_allows_writes(remote_name, push_url, repoAbsPath):
+    try:
+        cached_permission = cached_remote_write_permission(push_url, repoAbsPath)
+    except OSError as error:
+        exit_with_error(f"Could not read remote permission cache: {error}", repoAbsPath)
+
+    if cached_permission is not None:
+        if not cached_permission:
+            logger.info(
+                f"Skipping auto-commit and push because remote {remote_name} is cached as read-only."
+            )
+        return cached_permission
+
+    probe_ref = (
+        "refs/heads/git-auto-permission-check/"
+        f"{hashlib.sha256(push_url.encode()).hexdigest()[:12]}"
+    )
+    result = subprocess.run(
+        [
+            "git",
+            "push",
+            "--dry-run",
+            "--no-verify",
+            remote_name,
+            f"HEAD:{probe_ref}",
+        ],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode == 0:
+        writable = True
+    elif push_permission_was_denied(result):
+        writable = False
+    else:
+        exit_with_error(
+            f"Could not verify write permission for remote {remote_name}: {push_failure_message(result)}",
+            repoAbsPath,
+        )
+
+    try:
+        cache_remote_write_permission(push_url, repoAbsPath, writable)
+    except OSError as error:
+        exit_with_error(f"Could not update remote permission cache: {error}", repoAbsPath)
+
+    if writable:
+        logger.info(f"Verified and cached write permission for remote {remote_name}.")
+    else:
+        logger.info(
+            f"Remote {remote_name} denied write permission; cached as read-only and skipping auto-commit and push."
+        )
+    return writable
+
+
 def upstream_ahead_count(upstream):
     _local_ahead, upstream_ahead = branch_divergence(upstream)
     return upstream_ahead
@@ -437,12 +569,25 @@ def reconcile_remote_updates(repoAbsPath, push_result):
     rebase_onto_upstream(repoAbsPath, upstream)
 
 
-def push_with_auto_reconcile(repoAbsPath):
+def push_with_auto_reconcile(repoAbsPath, remote_name, push_url):
     for reconcile_attempt in range(PUSH_RECONCILE_ATTEMPTS + 1):
         result = subprocess.run(["git", "push"], capture_output=True, text=True)
         if result.returncode == 0:
             logger.info(f"Push successful in repo {repoAbsPath}.")
-            return
+            return True
+
+        if push_permission_was_denied(result):
+            try:
+                cache_remote_write_permission(push_url, repoAbsPath, False)
+            except OSError as error:
+                exit_with_error(
+                    f"Push permission was denied and the remote permission cache could not be updated: {error}",
+                    repoAbsPath,
+                )
+            logger.info(
+                f"Remote {remote_name} denied write permission; cached as read-only and leaving local commits unpushed."
+            )
+            return False
 
         if not push_was_rejected_for_remote_updates(result):
             exit_with_error(f"Push failed: {push_failure_message(result)}", repoAbsPath)
@@ -454,6 +599,17 @@ def push_with_auto_reconcile(repoAbsPath):
             )
 
         reconcile_remote_updates(repoAbsPath, result)
+
+    raise AssertionError("Push reconciliation loop exited unexpectedly")
+
+
+def working_tree_has_changes(repoAbsPath):
+    result = run_checked(
+        ["git", "status", "--porcelain"],
+        "Could not inspect working tree",
+        repoAbsPath,
+    )
+    return bool(result.stdout)
 
 
 def wait_for_index_lock(repoAbsPath):
@@ -581,6 +737,23 @@ def main():
     if pause_expired:
         logger.info(f"Auto-commit pause expired in repo {repoAbsPath}; resuming.")
 
+    if not working_tree_has_changes(repoAbsPath) and not has_local_commits_to_push(
+        repoAbsPath
+    ):
+        logger.info(f"No changes or local commits to push in repo {repoAbsPath}.")
+        if pause_expired:
+            clear_auto_commit_pause(repoAbsPath)
+        auto_commit_lock.close()
+        return
+
+    remote_name = push_remote_name(repoAbsPath)
+    push_url = remote_push_url(remote_name, repoAbsPath)
+    if not remote_allows_writes(remote_name, push_url, repoAbsPath):
+        if pause_expired:
+            clear_auto_commit_pause(repoAbsPath)
+        auto_commit_lock.close()
+        return
+
     try:
         claim_staging_window(
             repoAbsPath, args.staged_wait_seconds, args.staged_poll_seconds
@@ -610,7 +783,7 @@ def main():
             return
         logger.info(f"No changes to commit in repo {repoAbsPath}. Pushing local commits.")
 
-    push_with_auto_reconcile(repoAbsPath)
+    push_with_auto_reconcile(repoAbsPath, remote_name, push_url)
 
     if pause_expired:
         clear_auto_commit_pause(repoAbsPath)

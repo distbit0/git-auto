@@ -153,6 +153,19 @@ class GitAutoCommitTests(unittest.TestCase):
         self.assertIn("stderr:", message)
         self.assertIn(result.stderr.strip().splitlines()[0], message)
 
+    def test_captured_github_permission_denial_is_recognized(self):
+        captured_failure = (
+            Path(__file__).parent / "fixtures" / "github_push_permission_denied.txt"
+        ).read_text(encoding="utf-8")
+        denied_push = subprocess.CompletedProcess(
+            ["git", "push", "--dry-run", "--no-verify", "origin"],
+            128,
+            stdout="",
+            stderr=captured_failure,
+        )
+
+        self.assertTrue(git_auto_commit.push_permission_was_denied(denied_push))
+
     def test_has_staged_changes_detects_existing_index_work(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
             repo_path = Path(temporary_directory)
@@ -401,13 +414,56 @@ class GitAutoCommitTests(unittest.TestCase):
             tracked_file.write_text(git(local_path, "rev-parse", "HEAD").stdout, encoding="utf-8")
             git(local_path, "commit", "-am", "local update")
 
-            run_auto_commit(local_path)
+            result = run_auto_commit(local_path)
             git(local_path, "fetch", "--quiet")
 
+            permission_cache_path = (
+                local_path
+                / ".git"
+                / git_auto_commit.REMOTE_PERMISSION_CACHE_FILENAME
+            )
+            self.assertIn("Verified and cached write permission", result.stderr)
+            self.assertTrue(
+                permission_cache_path.read_text(encoding="utf-8").endswith(
+                    " writable\n"
+                )
+            )
             self.assertEqual(
                 git(local_path, "rev-parse", "HEAD").stdout,
                 git(local_path, "rev-parse", "origin/master").stdout,
             )
+
+    def test_cached_read_only_remote_leaves_dirty_work_untouched(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            base_path = Path(temporary_directory)
+            remote_path = base_path / "remote.git"
+            local_path = base_path / "local"
+
+            git(base_path, "init", "--bare", remote_path)
+            git(base_path, "clone", remote_path, local_path)
+            configure_test_repo(local_path)
+
+            tracked_file = local_path / "tracked.txt"
+            tracked_file.write_text(command_output("git", "--version"), encoding="utf-8")
+            git(local_path, "add", "tracked.txt")
+            git(local_path, "commit", "-m", "initial")
+            git(local_path, "push", "-u", "origin", "master")
+
+            original_head = git(local_path, "rev-parse", "HEAD").stdout
+            tracked_file.write_text(original_head, encoding="utf-8")
+            push_url = git(local_path, "remote", "get-url", "--push", "origin").stdout.strip()
+            with working_directory(local_path):
+                git_auto_commit.cache_remote_write_permission(
+                    push_url,
+                    str(local_path),
+                    False,
+                )
+
+            result = run_auto_commit(local_path)
+
+            self.assertIn("cached as read-only", result.stderr)
+            self.assertEqual(git(local_path, "rev-parse", "HEAD").stdout, original_head)
+            self.assertIn(" M tracked.txt", git(local_path, "status", "--short").stdout)
 
     def test_remote_update_is_rebased_and_pushed(self):
         with tempfile.TemporaryDirectory() as temporary_directory:
