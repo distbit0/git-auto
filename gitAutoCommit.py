@@ -31,6 +31,7 @@ ERROR_INBOX_PATH = Path(
         Path.home() / "notes/inbox-index.md",
     )
 )
+PRODUCER_PATH = Path(__file__).resolve()
 def getAbsPathFromScript(relPath):
     basepath = path.dirname(__file__)
     fullPath = path.abspath(path.join(basepath, relPath))
@@ -97,6 +98,7 @@ def append_error_to_inbox(message, repoAbsPath):
     indented_message = "\n".join(f"    {line}" for line in message.splitlines())
     entry = (
         "\n\ngit auto-commit error:\n"
+        f"producer: {PRODUCER_PATH}\n"
         f"repository: {repoAbsPath}\n\n"
         f"{indented_message}\n"
     )

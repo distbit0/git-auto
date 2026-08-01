@@ -97,6 +97,7 @@ class GitAutoCommitTests(unittest.TestCase):
 
         self.assertTrue(inbox_content.startswith(existing_content))
         self.assertIn("git auto-commit error:", inbox_content)
+        self.assertIn(f"producer: {MODULE_PATH}", inbox_content)
         self.assertIn("repository: /home/pimania/notes", inbox_content)
         for failure_line in failure_message.splitlines():
             self.assertIn(f"    {failure_line}", inbox_content)
